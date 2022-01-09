@@ -2,7 +2,7 @@ use crate::actor::Actor;
 use crate::errors::Error;
 use crate::sandbox::Sandbox;
 use solana_program::{program_pack::Pack, system_instruction};
-use solana_sdk::transaction::Transaction;
+use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use spl_token::{self, instruction as spl_instruction, state as spl_state};
 
 /// Represents an spl_token program Mint.
@@ -135,17 +135,17 @@ impl<'a> TokenAccount<'a> {
     ///
     /// The account is created by the actor. If no owner is specified, then the
     /// actor will be set as the owner.
-    pub fn new(
+    pub fn new<'b>(
         sandbox: &'a Sandbox,
         actor: &'a Actor,
         mint: &'a Mint,
-        owner: Option<&'a Actor>,
+        owner: Option<&'b Pubkey>,
     ) -> Result<TokenAccount<'a>, Error> {
         let account = Actor::new(sandbox);
 
         let owner = match owner {
             Some(person) => person,
-            None => actor,
+            None => actor.pubkey(),
         };
 
         let account_size = spl_state::Account::LEN;
@@ -164,7 +164,7 @@ impl<'a> TokenAccount<'a> {
             &spl_token::id(),
             account.pubkey(),
             mint.actor().pubkey(),
-            owner.pubkey(),
+            owner,
         )?;
 
         let recent_hash = sandbox.client().get_latest_blockhash()?;
