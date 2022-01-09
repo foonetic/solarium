@@ -6,6 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bytemuck = "1.7.3"
 foonetic-macros = {git = "https://github.com/foonetic/macros", version = "0.1"}
 portpicker = "0.1.0"
 serde_json = "1.0"
