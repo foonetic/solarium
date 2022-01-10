@@ -1,6 +1,12 @@
 mod tests {
     use solana_program::native_token::LAMPORTS_PER_SOL;
-    use solarium::{actor::Actor, sandbox::Sandbox, token::Mint, token::TokenAccount};
+    use solarium::{
+        actor::Actor,
+        sandbox::Sandbox,
+        serum::{Market, Participant},
+        token::Mint,
+        token::TokenAccount,
+    };
 
     #[test]
     fn integration() {
@@ -19,7 +25,7 @@ mod tests {
 
     /*
     #[test]
-    fn serum_v1() {
+    fn serum_v1_setup() {
         let sandbox = Sandbox::new().unwrap();
         let actor = Actor::new(&sandbox);
         actor.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
@@ -61,7 +67,7 @@ mod tests {
             ))
             .unwrap();
 
-        solarium::serum::Market::new(
+        let market = solarium::serum::Market::new(
             &sandbox,
             &actor,
             serum_program.pubkey(),
@@ -76,6 +82,9 @@ mod tests {
             256,
         )
         .unwrap();
+
+        let _market_maker =
+            Participant::new(&sandbox, &actor, &market, 10 * LAMPORTS_PER_SOL, 1000, 2000).unwrap();
     }
     */
 }
