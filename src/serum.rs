@@ -10,13 +10,17 @@ use solana_sdk::pubkey::Pubkey;
 /// specified, otherwise a V1 market.
 pub struct Market<'a> {
     _sandbox: &'a Sandbox,
-    _market: Actor<'a>,
+    serum: &'a Pubkey,
+    market: Actor<'a>,
+    authority: Option<&'a Pubkey>,
     _request_queue: Actor<'a>,
     _event_queue: Actor<'a>,
     _bids: Actor<'a>,
     _asks: Actor<'a>,
     _base_vault: TokenAccount<'a>,
     _quote_vault: TokenAccount<'a>,
+    base_mint: &'a Mint<'a>,
+    quote_mint: &'a Mint<'a>,
 }
 
 impl<'a> Market<'a> {
@@ -188,13 +192,104 @@ impl<'a> Market<'a> {
 
         Ok(Market {
             _sandbox: sandbox,
-            _market: market,
+            serum: serum,
+            market: market,
+            authority: authority,
             _request_queue: request_queue,
             _event_queue: event_queue,
             _bids: bids,
             _asks: asks,
             _base_vault: base_vault,
             _quote_vault: quote_vault,
+            base_mint: base_mint,
+            quote_mint: quote_mint,
+        })
+    }
+}
+
+/// Represents a Serum market participant.
+pub struct Participant<'a> {
+    _market: &'a Market<'a>,
+    _base: TokenAccount<'a>,
+    _quote: TokenAccount<'a>,
+    _open_orders: Actor<'a>,
+}
+
+impl<'a> Participant<'a> {
+    /// Constructs a Serum market participant and seeds the participant account
+    /// with lamports to drive transactions, as well as some amount of base and
+    /// quote tokens.
+    pub fn new(
+        sandbox: &'a Sandbox,
+        actor: &'a Actor,
+        market: &'a Market,
+        starting_lamports: u64,
+        starting_base: u64,
+        starting_quote: u64,
+    ) -> Result<Participant<'a>, Error> {
+        let participant = Actor::new(sandbox);
+        participant.airdrop(starting_lamports)?;
+        let participant_base =
+            TokenAccount::new(sandbox, actor, market.base_mint, Some(participant.pubkey()))?;
+        let participant_quote = TokenAccount::new(
+            sandbox,
+            actor,
+            market.quote_mint,
+            Some(participant.pubkey()),
+        )?;
+        if starting_base > 0 {
+            market
+                .base_mint
+                .mint_to(actor, &participant_base, starting_base)?;
+        }
+
+        if starting_quote > 0 {
+            market
+                .quote_mint
+                .mint_to(actor, &participant_quote, starting_quote)?;
+        }
+
+        let participant_open_orders = Actor::new(sandbox);
+        let open_orders_size = std::mem::size_of::<serum_dex::state::OpenOrders>()
+            + serum_state::ACCOUNT_HEAD_PADDING.len()
+            + serum_state::ACCOUNT_TAIL_PADDING.len();
+        let create_open_orders = solana_sdk::system_instruction::create_account(
+            actor.pubkey(),
+            participant_open_orders.pubkey(),
+            sandbox
+                .client()
+                .get_minimum_balance_for_rent_exemption(open_orders_size)?,
+            open_orders_size as u64,
+            market.serum,
+        );
+        let init_open_orders = serum_dex::instruction::init_open_orders(
+            market.serum,
+            participant_open_orders.pubkey(),
+            participant.pubkey(),
+            market.market.pubkey(),
+            market.authority,
+        )?;
+
+        let recent_hash = sandbox.client().get_latest_blockhash()?;
+        let transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
+            &[create_open_orders, init_open_orders],
+            Some(actor.pubkey()),
+            &vec![
+                actor.keypair(),
+                participant_open_orders.keypair(),
+                participant.keypair(),
+            ],
+            recent_hash,
+        );
+        sandbox
+            .client()
+            .send_and_confirm_transaction(&transaction)?;
+
+        Ok(Participant {
+            _market: &market,
+            _base: participant_base,
+            _quote: participant_quote,
+            _open_orders: participant_open_orders,
         })
     }
 }
