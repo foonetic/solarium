@@ -2,6 +2,7 @@ use crate::errors::Error;
 use crate::sandbox::Sandbox;
 use serde_json;
 use solana_sdk::{
+    instruction::Instruction,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
@@ -97,5 +98,24 @@ impl<'a> Actor<'a> {
                 std::io::ErrorKind::InvalidInput,
             )))
         }
+    }
+
+    /// Returns an instruction to create an account at the given address with
+    /// the given size and owner. Funds the account so that it is rent-exempt.
+    pub fn create_account(
+        &self,
+        target: &Pubkey,
+        target_bytes: usize,
+        target_owner: &Pubkey,
+    ) -> Result<Instruction, Error> {
+        Ok(solana_sdk::system_instruction::create_account(
+            self.pubkey(),
+            target,
+            self.sandbox
+                .client()
+                .get_minimum_balance_for_rent_exemption(target_bytes)?,
+            target_bytes as u64,
+            target_owner,
+        ))
     }
 }
