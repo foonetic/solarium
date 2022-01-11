@@ -118,4 +118,43 @@ impl<'a> Actor<'a> {
             target_owner,
         ))
     }
+
+    /// Builds a source code archive from the given URL and deploys it. If a
+    /// subfolder argument is provided, then this function will deploy the
+    /// program in the given subfolder of the source code archive. The deploy
+    /// artifact is specified as a source relative path (including the
+    /// subfolder, if provided) to the built .so file that should be deployed.
+    pub fn deploy_src_zip<T: reqwest::IntoUrl>(
+        &self,
+        url: T,
+        subfolder: Option<&str>,
+        deploy_artifact: &str,
+    ) -> Result<Actor, Error> {
+        let response = reqwest::get(url);
+        let response = self.sandbox.runtime().block_on(response)?;
+        let result = self.sandbox.runtime().block_on(response.bytes())?;
+        let tempdir = tempfile::tempdir_in(self.sandbox.tmpdir())?;
+        zip_extract::extract(
+            std::io::Cursor::new(&result),
+            &std::path::PathBuf::from(tempdir.path()),
+            true,
+        )?;
+        let src_path = match subfolder {
+            Some(x) => tempdir.path().join(x),
+            None => tempdir.path().to_path_buf(),
+        };
+        let src_path = std::path::Path::new(&src_path);
+        let code = process::Command::new("cargo")
+            .args(["build-bpf"])
+            .current_dir(src_path)
+            .spawn()?
+            .wait()?;
+        if !code.success() {
+            return Err(Error::InputOutputError(std::io::Error::from(
+                std::io::ErrorKind::InvalidInput,
+            )));
+        }
+
+        self.deploy(src_path.join(deploy_artifact).as_path())
+    }
 }

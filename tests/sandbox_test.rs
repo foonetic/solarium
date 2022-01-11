@@ -23,7 +23,6 @@ mod tests {
         assert_eq!(123, account_info.amount);
     }
 
-    /*
     #[test]
     fn serum_v1_setup() {
         let sandbox = Sandbox::new().unwrap();
@@ -32,9 +31,11 @@ mod tests {
         let base_mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
         let quote_mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
         let serum_program = actor
-            .deploy(&std::path::Path::new(
-                "/home/yfang/serum-dex/dex/target/deploy/serum_dex.so",
-            ))
+            .deploy_src_zip(
+                "https://github.com/project-serum/serum-dex/archive/refs/tags/v0.5.2.zip",
+                Some("dex"),
+                "target/deploy/serum_dex.so",
+            )
             .unwrap();
 
         Market::new(
@@ -62,9 +63,11 @@ mod tests {
         let base_mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
         let quote_mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
         let serum_program = actor
-            .deploy(&std::path::Path::new(
-                "/home/yfang/serum-dex/dex/target/deploy/serum_dex.so",
-            ))
+            .deploy_src_zip(
+                "https://github.com/project-serum/serum-dex/archive/refs/tags/v0.5.2.zip",
+                Some("dex"),
+                "target/deploy/serum_dex.so",
+            )
             .unwrap();
 
         let market = solarium::serum::Market::new(
@@ -86,5 +89,4 @@ mod tests {
         let _market_maker =
             Participant::new(&sandbox, &actor, &market, 10 * LAMPORTS_PER_SOL, 1000, 2000).unwrap();
     }
-    */
 }

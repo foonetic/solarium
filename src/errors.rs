@@ -4,4 +4,6 @@ pub enum Error {
     SolanaProgramError(solana_sdk::program_error::ProgramError),
     InputOutputError(std::io::Error),
     SerumDexError(serum_dex::error::DexError),
+    ReqwestError(reqwest::Error),
+    ZipExtractError(zip_extract::ZipExtractError),
 }

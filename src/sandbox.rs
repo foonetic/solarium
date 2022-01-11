@@ -12,6 +12,7 @@ pub struct Sandbox {
     validator: process::Child,
     port: u16,
     client: rpc_client::RpcClient,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl Sandbox {
@@ -51,6 +52,7 @@ impl Sandbox {
             validator: validator,
             port: port,
             client: client,
+            runtime: tokio::runtime::Runtime::new().unwrap(),
         })
     }
 
@@ -72,6 +74,11 @@ impl Sandbox {
     /// Returns a temporary directory associated with this Sandbox.
     pub fn tmpdir(&self) -> &std::path::Path {
         self.tmp.as_ref()
+    }
+
+    /// Returns an async runtime.
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
     }
 }
 
