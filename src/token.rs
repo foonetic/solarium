@@ -1,7 +1,7 @@
 use crate::actor::Actor;
 use crate::errors::Error;
 use crate::sandbox::Sandbox;
-use solana_program::{program_pack::Pack, system_instruction};
+use solana_program::program_pack::Pack;
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
 use spl_token::{self, instruction as spl_instruction, state as spl_state};
 
@@ -37,18 +37,8 @@ impl<'a> Mint<'a> {
             None => authority,
         };
 
-        let mint_size = spl_state::Mint::LEN;
-        let mint_rent = sandbox
-            .client()
-            .get_minimum_balance_for_rent_exemption(mint_size)?;
-        let create_account = system_instruction::create_account(
-            actor.pubkey(),
-            mint.pubkey(),
-            mint_rent,
-            mint_size as u64,
-            &spl_token::id(),
-        );
-
+        let create_account =
+            actor.create_account(mint.pubkey(), spl_state::Mint::LEN, &spl_token::id())?;
         let initialize_mint = spl_instruction::initialize_mint(
             &spl_token::id(),
             mint.pubkey(),
@@ -148,18 +138,8 @@ impl<'a> TokenAccount<'a> {
             None => actor.pubkey(),
         };
 
-        let account_size = spl_state::Account::LEN;
-        let account_rent = sandbox
-            .client()
-            .get_minimum_balance_for_rent_exemption(account_size)?;
-        let create_account = system_instruction::create_account(
-            actor.pubkey(),
-            account.pubkey(),
-            account_rent,
-            account_size as u64,
-            &spl_token::id(),
-        );
-
+        let create_account =
+            actor.create_account(account.pubkey(), spl_state::Account::LEN, &spl_token::id())?;
         let initialize_account = spl_instruction::initialize_account(
             &spl_token::id(),
             account.pubkey(),

@@ -141,15 +141,7 @@ impl<'a> Market<'a> {
 
         let mut instructions = Vec::new();
         for (pubkey, len) in sized_accounts.iter() {
-            instructions.push(solana_sdk::system_instruction::create_account(
-                actor.pubkey(),
-                pubkey,
-                sandbox
-                    .client()
-                    .get_minimum_balance_for_rent_exemption(*len)?,
-                *len as u64,
-                serum,
-            ));
+            instructions.push(actor.create_account(pubkey, *len, serum)?);
         }
 
         instructions.push(serum_dex::instruction::initialize_market(
