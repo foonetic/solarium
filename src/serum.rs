@@ -3,8 +3,13 @@ use crate::errors::Error;
 use crate::sandbox::Sandbox;
 use crate::token::{Mint, TokenAccount};
 use bytemuck;
-use serum_dex::state as serum_state;
+use serum_dex::{
+    instruction::SelfTradeBehavior,
+    matching::{OrderType, Side},
+    state as serum_state,
+};
 use solana_sdk::pubkey::Pubkey;
+use std::num::NonZeroU64;
 
 /// Represents a Serum market. This is a V2 market if there is an authority
 /// specified, otherwise a V1 market.
@@ -21,6 +26,7 @@ pub struct Market<'a> {
     _quote_vault: TokenAccount<'a>,
     base_mint: &'a Mint<'a>,
     quote_mint: &'a Mint<'a>,
+    pub open_orders_accounts: Vec<&'a Pubkey>,
 }
 
 impl<'a> Market<'a> {
@@ -75,6 +81,105 @@ impl<'a> Market<'a> {
                 _ => nonce += 1,
             }
         }
+    }
+
+    pub fn consume_events(
+        &self,
+        participant: Participant<'a>,
+        coin_fee_receivable_account: &Pubkey,
+        pc_fee_receivable_account: &Pubkey,
+        limit: u16,
+    ) -> Result<(), Error> {
+        let mut instructions = Vec::new();
+        instructions.push(serum_dex::instruction::consume_events(
+            self.serum,
+            self.open_orders_accounts.clone(),
+            self.market.pubkey(),
+            self._event_queue.pubkey(),
+            coin_fee_receivable_account,
+            pc_fee_receivable_account,
+            limit,
+        )?);
+
+        let recent_hash = self._sandbox.client().get_latest_blockhash()?;
+        let market_transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
+            &instructions,
+            Some(participant.account().pubkey()),
+            &vec![
+                participant.account().keypair(),
+                self.market.keypair(),
+                self._request_queue.keypair(),
+                self._event_queue.keypair(),
+                self._bids.keypair(),
+                self._asks.keypair(),
+            ],
+            recent_hash,
+        );
+        self._sandbox
+            .client()
+            .send_and_confirm_transaction(&market_transaction)?;
+
+        Ok(())
+    }
+
+    /// Creates a new order and pushes it to the sandbox.
+    /// The participant pays the fees for this transaction.
+    pub fn new_order(
+        &self,
+        payer: &Actor<'a>,
+        participant: &Participant<'a>,
+        side: Side,
+        limit_price: NonZeroU64,
+        order_type: OrderType,
+        max_base_qty: NonZeroU64,
+        client_order_id: u64,
+        self_trade_behavior: SelfTradeBehavior,
+        limit: u16,
+        max_native_quote_including_fees: NonZeroU64,
+        srm_account_referral: Option<&Pubkey>,
+    ) -> Result<(), Error> {
+        let mut instructions = Vec::new();
+
+        // Create new order instruction.
+        // The participant pays and is the owner of the open_orders account provided.
+        instructions.push(serum_dex::instruction::new_order(
+            self.market.pubkey(),
+            participant.open_orders().pubkey(),
+            self._request_queue.pubkey(),
+            self._event_queue.pubkey(),
+            self._bids.pubkey(),
+            self._asks.pubkey(),
+            payer.pubkey(),
+            participant.account().pubkey(),
+            self._base_vault.account().pubkey(),
+            self._quote_vault.account().pubkey(),
+            &spl_token::ID,
+            &solana_program::sysvar::rent::ID,
+            srm_account_referral,
+            self.serum,
+            side,
+            limit_price,
+            max_base_qty,
+            order_type,
+            client_order_id,
+            self_trade_behavior,
+            limit,
+            max_native_quote_including_fees,
+        )?);
+
+        // Push transaction
+        let recent_hash = self._sandbox.client().get_latest_blockhash()?;
+        let market_transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
+            &instructions,
+            Some(participant.account().pubkey()),
+            &vec![participant.account().keypair()],
+            recent_hash,
+        );
+        self._sandbox
+            .client()
+            .send_and_confirm_transaction(&market_transaction)?;
+
+        Ok(())
     }
 
     /// Creates and initializes a serum market. Creation is funded by the given
@@ -182,6 +287,7 @@ impl<'a> Market<'a> {
             .client()
             .send_and_confirm_transaction(&market_transaction)?;
 
+        let open_orders_accounts = Vec::new();
         Ok(Market {
             _sandbox: sandbox,
             serum: serum,
@@ -195,6 +301,7 @@ impl<'a> Market<'a> {
             _quote_vault: quote_vault,
             base_mint: base_mint,
             quote_mint: quote_mint,
+            open_orders_accounts: open_orders_accounts,
         })
     }
 }
@@ -205,48 +312,76 @@ pub struct Participant<'a> {
     _base: TokenAccount<'a>,
     _quote: TokenAccount<'a>,
     _open_orders: Actor<'a>,
+    _account: Actor<'a>,
 }
 
 impl<'a> Participant<'a> {
+    /// Returns base account.
+    pub fn base(&self) -> &Actor {
+        &self._base.account()
+    }
+
+    /// Returns quote account.
+    pub fn quote(&self) -> &Actor {
+        &self._quote.account()
+    }
+
+    /// Returns open orders account.
+    pub fn open_orders(&self) -> &Actor {
+        &self._open_orders
+    }
+
+    /// Returns underlying account.
+    pub fn account(&self) -> &Actor {
+        &self._account
+    }
+
     /// Constructs a Serum market participant and seeds the participant account
     /// with lamports to drive transactions, as well as some amount of base and
     /// quote tokens.
     pub fn new(
         sandbox: &'a Sandbox,
-        actor: &'a Actor,
-        market: &'a Market,
+        payer: &'a Actor,
+        market: &'a Market<'a>,
         starting_lamports: u64,
         starting_base: u64,
         starting_quote: u64,
     ) -> Result<Participant<'a>, Error> {
+        // Create a participant actor with initial balance
         let participant = Actor::new(sandbox);
         participant.airdrop(starting_lamports)?;
+
+        // Setup base and quote accounts
         let participant_base =
-            TokenAccount::new(sandbox, actor, market.base_mint, Some(participant.pubkey()))?;
+            TokenAccount::new(sandbox, payer, market.base_mint, Some(participant.pubkey()))?;
         let participant_quote = TokenAccount::new(
             sandbox,
-            actor,
+            payer,
             market.quote_mint,
             Some(participant.pubkey()),
         )?;
+
+        // Mint amounts to base & quote token accounts
         if starting_base > 0 {
             market
                 .base_mint
-                .mint_to(actor, &participant_base, starting_base)?;
+                .mint_to(payer, &participant_base, starting_base)?;
         }
-
         if starting_quote > 0 {
             market
                 .quote_mint
-                .mint_to(actor, &participant_quote, starting_quote)?;
+                .mint_to(payer, &participant_quote, starting_quote)?;
         }
 
+        // Create open orders account
         let participant_open_orders = Actor::new(sandbox);
         let open_orders_size = std::mem::size_of::<serum_dex::state::OpenOrders>()
             + serum_state::ACCOUNT_HEAD_PADDING.len()
             + serum_state::ACCOUNT_TAIL_PADDING.len();
+
+        // Set serum to the owner of the open orders account
         let create_open_orders = solana_sdk::system_instruction::create_account(
-            actor.pubkey(),
+            payer.pubkey(),
             participant_open_orders.pubkey(),
             sandbox
                 .client()
@@ -254,6 +389,8 @@ impl<'a> Participant<'a> {
             open_orders_size as u64,
             market.serum,
         );
+
+        // Set participant_open_order's userspace owner to participant
         let init_open_orders = serum_dex::instruction::init_open_orders(
             market.serum,
             participant_open_orders.pubkey(),
@@ -262,12 +399,13 @@ impl<'a> Participant<'a> {
             market.authority,
         )?;
 
+        // Push both transactions
         let recent_hash = sandbox.client().get_latest_blockhash()?;
         let transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
             &[create_open_orders, init_open_orders],
-            Some(actor.pubkey()),
+            Some(payer.pubkey()),
             &vec![
-                actor.keypair(),
+                payer.keypair(),
                 participant_open_orders.keypair(),
                 participant.keypair(),
             ],
@@ -282,6 +420,7 @@ impl<'a> Participant<'a> {
             _base: participant_base,
             _quote: participant_quote,
             _open_orders: participant_open_orders,
+            _account: participant,
         })
     }
 }
