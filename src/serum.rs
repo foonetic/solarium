@@ -30,38 +30,67 @@ pub struct Market<'a> {
 }
 
 impl<'a> Market<'a> {
+    /// Gets the request queue.
+    pub fn request_queue(&self) -> &Actor {
+        &self._request_queue
+    }
+
+    /// Gets the event queue.
+    pub fn event_queue(&self) -> &Actor {
+        &self._event_queue
+    }
+
+    /// Get bids.
+    pub fn bids(&self) -> &Actor {
+        &self._bids
+    }
+
+    /// Get asks.
+    pub fn asks(&self) -> &Actor {
+        &self._asks
+    }
+
+    /// Get base vault.
+    pub fn base_vault(&self) -> &Actor {
+        &self._base_vault.account()
+    }
+
+    /// Get quote vault.
+    pub fn quote_vault(&self) -> &Actor {
+        &self._quote_vault.account()
+    }
+
+    /// Calculates request queue size given a number of requests.
     fn request_queue_size(num_requests: usize) -> usize {
-        let mut size: usize = 0;
-        size += serum_state::ACCOUNT_HEAD_PADDING.len();
-        size += serum_state::ACCOUNT_TAIL_PADDING.len();
-        size += std::mem::size_of::<serum_state::RequestQueueHeader>();
-        size += num_requests * std::mem::size_of::<serum_state::Request>();
-        size
+        serum_state::ACCOUNT_HEAD_PADDING.len()
+            + serum_state::ACCOUNT_TAIL_PADDING.len()
+            + std::mem::size_of::<serum_state::RequestQueueHeader>()
+            + num_requests * std::mem::size_of::<serum_state::Request>()
     }
 
+    /// Calculates event queue size given a number of events.
     fn event_queue_size(num_events: usize) -> usize {
-        let mut size: usize = 0;
-        size += serum_state::ACCOUNT_HEAD_PADDING.len();
-        size += serum_state::ACCOUNT_TAIL_PADDING.len();
-        size += std::mem::size_of::<serum_state::EventQueueHeader>();
-        size += num_events * std::mem::size_of::<serum_state::Event>();
-        size
+        serum_state::ACCOUNT_HEAD_PADDING.len()
+            + serum_state::ACCOUNT_TAIL_PADDING.len()
+            + std::mem::size_of::<serum_state::EventQueueHeader>()
+            + num_events * std::mem::size_of::<serum_state::Event>()
     }
 
+    /// Calculates side size given a number of nodes.
     fn side_size(num_nodes: usize) -> usize {
-        let mut size: usize = 0;
-        size += serum_state::ACCOUNT_HEAD_PADDING.len();
-        size += serum_state::ACCOUNT_TAIL_PADDING.len();
-        size += 8; // private struct OrderBookStateHeader
-        size += 8 + 8 + 4 + 4 + 8; // private struct SlabHeader
-        size += num_nodes * std::mem::size_of::<serum_dex::critbit::AnyNode>();
-        size
+        serum_state::ACCOUNT_HEAD_PADDING.len()
+        + serum_state::ACCOUNT_TAIL_PADDING.len()
+        + 8 // private struct OrderBookStateHeader
+        + 8 + 8 + 4 + 4 + 8 // private struct SlabHeader
+        + num_nodes * std::mem::size_of::<serum_dex::critbit::AnyNode>()
     }
 
+    /// Calculates market size. If authority is granted,
+    /// this will calculate the size of a Serum V2 market. Otherwise,
+    /// it will calculate the authority of a Serum V1 market.
     fn market_size(has_authority: bool) -> usize {
-        let mut size: usize = 0;
-        size += serum_state::ACCOUNT_HEAD_PADDING.len();
-        size += serum_state::ACCOUNT_TAIL_PADDING.len();
+        let mut size: usize =
+            serum_state::ACCOUNT_HEAD_PADDING.len() + serum_state::ACCOUNT_TAIL_PADDING.len();
         if has_authority {
             size += std::mem::size_of::<serum_state::MarketStateV2>();
         } else {
@@ -81,45 +110,6 @@ impl<'a> Market<'a> {
                 _ => nonce += 1,
             }
         }
-    }
-
-    pub fn consume_events(
-        &self,
-        participant: Participant<'a>,
-        coin_fee_receivable_account: &Pubkey,
-        pc_fee_receivable_account: &Pubkey,
-        limit: u16,
-    ) -> Result<(), Error> {
-        let mut instructions = Vec::new();
-        instructions.push(serum_dex::instruction::consume_events(
-            self.serum,
-            self.open_orders_accounts.clone(),
-            self.market.pubkey(),
-            self._event_queue.pubkey(),
-            coin_fee_receivable_account,
-            pc_fee_receivable_account,
-            limit,
-        )?);
-
-        let recent_hash = self._sandbox.client().get_latest_blockhash()?;
-        let market_transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
-            &instructions,
-            Some(participant.account().pubkey()),
-            &vec![
-                participant.account().keypair(),
-                self.market.keypair(),
-                self._request_queue.keypair(),
-                self._event_queue.keypair(),
-                self._bids.keypair(),
-                self._asks.keypair(),
-            ],
-            recent_hash,
-        );
-        self._sandbox
-            .client()
-            .send_and_confirm_transaction(&market_transaction)?;
-
-        Ok(())
     }
 
     /// Creates a new order and pushes it to the sandbox.
@@ -287,7 +277,6 @@ impl<'a> Market<'a> {
             .client()
             .send_and_confirm_transaction(&market_transaction)?;
 
-        let open_orders_accounts = Vec::new();
         Ok(Market {
             _sandbox: sandbox,
             serum: serum,
@@ -301,7 +290,7 @@ impl<'a> Market<'a> {
             _quote_vault: quote_vault,
             base_mint: base_mint,
             quote_mint: quote_mint,
-            open_orders_accounts: open_orders_accounts,
+            open_orders_accounts: Vec::new(),
         })
     }
 }
@@ -351,7 +340,6 @@ impl<'a> Participant<'a> {
         let participant = Actor::new(sandbox);
         participant.airdrop(starting_lamports)?;
 
-        // Setup base and quote accounts
         let participant_base =
             TokenAccount::new(sandbox, payer, market.base_mint, Some(participant.pubkey()))?;
         let participant_quote = TokenAccount::new(
@@ -361,7 +349,6 @@ impl<'a> Participant<'a> {
             Some(participant.pubkey()),
         )?;
 
-        // Mint amounts to base & quote token accounts
         if starting_base > 0 {
             market
                 .base_mint
@@ -373,7 +360,6 @@ impl<'a> Participant<'a> {
                 .mint_to(payer, &participant_quote, starting_quote)?;
         }
 
-        // Create open orders account
         let participant_open_orders = Actor::new(sandbox);
         let open_orders_size = std::mem::size_of::<serum_dex::state::OpenOrders>()
             + serum_state::ACCOUNT_HEAD_PADDING.len()
@@ -399,7 +385,6 @@ impl<'a> Participant<'a> {
             market.authority,
         )?;
 
-        // Push both transactions
         let recent_hash = sandbox.client().get_latest_blockhash()?;
         let transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
             &[create_open_orders, init_open_orders],
