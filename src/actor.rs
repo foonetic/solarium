@@ -23,9 +23,7 @@ impl<'a> Actor<'a> {
         let pubkey = keypair.pubkey();
         let keyfile =
             tempfile::NamedTempFile::new_in(sandbox.tmpdir()).expect("could not create keyfile");
-        let keypair_slice: &[u8] = &keypair.to_bytes();
-        let key_json = serde_json::json!(keypair_slice).to_string();
-        write!(&keyfile, "{}", key_json).expect("could not write to keyfile");
+        solana_sdk::signature::write_keypair_file(&keypair, &keyfile.path());
         keyfile.as_file().flush().expect("could not flush keyfile");
 
         Self {
@@ -52,6 +50,10 @@ impl<'a> Actor<'a> {
         self.keyfile.path()
     }
 
+    pub fn sandbox(&self) -> &Sandbox {
+        &self.sandbox
+    }
+
     /// Airdrops the given number of lamports to this actor. Blocks until the
     /// airdrop is complete.
     pub fn airdrop(&self, lamports: u64) -> Result<(), Error> {
@@ -70,7 +72,7 @@ impl<'a> Actor<'a> {
     /// `target/deploy/program.so`. Returns the Actor representing the deployed
     /// program. In particular, the returned Actor's public key is the program's
     /// public key.
-    pub fn deploy(&self, program_location: &std::path::Path) -> Result<Actor, Error> {
+    pub fn deploy_local(&self, program_location: &std::path::Path) -> Result<Actor, Error> {
         let actor = Actor::new(self.sandbox);
 
         let code = process::Command::new("solana")
@@ -88,6 +90,43 @@ impl<'a> Actor<'a> {
                 program_location
                     .to_str()
                     .expect("could not specify program location"),
+            ])
+            .spawn()?
+            .wait()?;
+        if code.success() {
+            Ok(actor)
+        } else {
+            Err(Error::InputOutputError(std::io::Error::from(
+                std::io::ErrorKind::InvalidInput,
+            )))
+        }
+    }
+
+    // Grabs executable from git and replicates it in the /solarium directory
+    // Then, deploys the program to solana
+    // git_location: url to raw binary (i.e. ../../raw/../something.so)
+    // file_name: local file name via wget
+    pub fn deploy_remote(&self, git_location: &str, file_name: &str) -> Result<Actor, Error> {
+        let actor = Actor::new(self.sandbox);
+
+        let get = process::Command::new("wget")
+            .args(["-O", file_name, git_location])
+            .spawn()?
+            .wait()?;
+
+        let code = process::Command::new("solana")
+            .args([
+                "program",
+                "deploy",
+                "--keypair",
+                &self.keyfile().to_str().expect("could not specify keyfile"),
+                "--program-id",
+                &actor.keyfile().to_str().expect("could not specify keyfile"),
+                "--commitment",
+                "finalized",
+                "--url",
+                &self.sandbox.url(),
+                &("./".to_owned() + &file_name),
             ])
             .spawn()?
             .wait()?;
