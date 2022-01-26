@@ -1,2 +1,7 @@
-/target
+**/target
 Cargo.lock
+**/test-ledger
+crank_log.txt
+serum_dex.so
+
+.DS_Store

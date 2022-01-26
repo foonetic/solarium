@@ -1,10 +1,16 @@
 use crate::actor::Actor;
 use crate::errors::Result;
 use crate::sandbox::Sandbox;
+use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use spl_token::{self, instruction as spl_instruction, state as spl_state};
 
+#[derive(BorshSerialize, BorshDeserialize, Eq, PartialEq, PartialOrd)]
+pub enum BaseOrQuote {
+    Base,
+    Quote,
+}
 /// Represents an spl_token program Mint.
 pub struct Mint<'a> {
     sandbox: &'a Sandbox,

@@ -27,6 +27,7 @@ pub struct Market<'a> {
     asks: Actor<'a>,
     base_vault: TokenAccount<'a>,
     quote_vault: TokenAccount<'a>,
+    vault_signer_key: Pubkey,
     base_mint: &'a Mint<'a>,
     quote_mint: &'a Mint<'a>,
     pub open_orders_accounts: Vec<&'a Pubkey>,
@@ -135,6 +136,9 @@ impl<'a> Market<'a> {
             ],
         )?;
 
+        let vault_signer_key =
+            serum_dex::state::gen_vault_signer_key(vault_nonce, market.pubkey(), serum)?;
+
         Ok(Market {
             sandbox,
             serum,
@@ -146,6 +150,7 @@ impl<'a> Market<'a> {
             asks,
             base_vault,
             quote_vault,
+            vault_signer_key,
             base_mint,
             quote_mint,
             open_orders_accounts: Vec::new(),
@@ -310,7 +315,7 @@ impl<'a> Market<'a> {
 
     /// Returns reference to bids account
     pub fn bids(&self) -> &Actor {
-        &self.request_queue
+        &self.bids
     }
 
     /// Returns reference to asks account
@@ -326,6 +331,21 @@ impl<'a> Market<'a> {
     /// Returns reference to this market's quote vault account
     pub fn quote_vault(&self) -> &TokenAccount {
         &self.quote_vault
+    }
+
+    /// Returns reference to this market's base mint account
+    pub fn base_mint(&self) -> &Mint {
+        &self.base_mint
+    }
+
+    /// Returns reference to this market's quote mint account
+    pub fn quote_mint(&self) -> &Mint {
+        &self.quote_mint
+    }
+
+    /// Returns reference to this market's vault signer key
+    pub fn vault_signer_key(&self) -> &Pubkey {
+        &self.vault_signer_key
     }
 
     /// Fetch the size/space of the request queue account given a number of requests
