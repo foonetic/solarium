@@ -38,8 +38,11 @@ impl Sandbox {
             .stdout(std::process::Stdio::null())
             .spawn()?;
 
-        let client =
-            rpc_client::RpcClient::new(String::from("http://localhost:") + &port.to_string());
+        let commitment_level = solana_sdk::commitment_config::CommitmentConfig::confirmed();
+        let client = rpc_client::RpcClient::new_with_commitment(
+            String::from("http://localhost:") + &port.to_string(),
+            commitment_level,
+        );
 
         // Wait for the cluster to come online and respond to basic commands.
         while client.get_latest_blockhash().is_err() {
