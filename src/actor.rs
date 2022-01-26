@@ -84,7 +84,7 @@ impl<'a> Actor<'a> {
                 "--program-id",
                 &actor.keyfile().to_str().expect("could not specify keyfile"),
                 "--commitment",
-                "finalized",
+                "confirmed",
                 "--url",
                 &self.sandbox.url(),
                 program_location
@@ -123,7 +123,7 @@ impl<'a> Actor<'a> {
                 "--program-id",
                 &actor.keyfile().to_str().expect("could not specify keyfile"),
                 "--commitment",
-                "finalized",
+                "confirmed",
                 "--url",
                 &self.sandbox.url(),
                 &("./".to_owned() + &file_name),
