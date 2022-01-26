@@ -1,33 +1,20 @@
 mod tests {
-    use solana_program::account_info::AccountInfo;
+    use borsh::{BorshDeserialize, BorshSerialize};
     use solana_program::native_token::LAMPORTS_PER_SOL;
-    use std::thread;
-    use std::thread::sleep;
-    use std::time::Duration;
+    use std::borrow::Borrow;
+    use std::num::NonZeroU64;
 
     use solarium::{
         actor::Actor,
         sandbox::Sandbox,
-        serum::{Market, Participant},
-        token::Mint,
-        token::TokenAccount,
+        serum::Participant,
+        token::{BaseOrQuote, Mint},
     };
-
-    use crank::{start, Command, Opts};
-
-    use serum_dex::instruction::{consume_events, MarketInstruction};
-
-    use serum_dex::state::strip_header;
 
     use serum_dex::{
         instruction::SelfTradeBehavior,
         matching::{OrderType, Side},
-        state as serum_state,
     };
-
-    use serum_common::client::Cluster;
-
-    use std::num::NonZeroU64;
 
     #[test]
     fn integration() {
@@ -81,7 +68,7 @@ mod tests {
         .unwrap();
 
         // Place ask order
-        let taker_order = market
+        let _taker_order = market
             .new_order(
                 &taker.quote(),
                 &taker,
@@ -98,7 +85,7 @@ mod tests {
             .unwrap();
         println!("Placed bid order.");
 
-        let maker_order = market
+        let _maker_order = market
             .new_order(
                 &maker.base(),
                 &maker,
@@ -135,11 +122,15 @@ mod tests {
         matching == a.len() && matching == b.len()
     }
 
-    fn get_balance(participant: &Participant, sandbox: &Sandbox) -> String {
+    fn get_pubkey_balance(pubkey: &solana_program::pubkey::Pubkey, sandbox: &Sandbox) -> String {
         sandbox
             .client()
-            .get_token_account_balance(participant.base().pubkey())
+            .get_token_account_balance(pubkey)
             .unwrap()
             .amount
+    }
+
+    fn get_balance(participant: &Participant, sandbox: &Sandbox) -> String {
+        get_pubkey_balance(participant.base().pubkey(), sandbox)
     }
 }
