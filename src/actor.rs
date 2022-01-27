@@ -72,13 +72,13 @@ impl<'a> Actor<'a> {
     pub fn try_deploy_local(
         &self,
         program_location: &std::path::Path,
-        fallback_git_location: &str,
+        fallback_remote_location: &str,
         fallback_file_name: &str,
     ) -> Result<Actor, Error> {
         if program_location.exists() {
             self.deploy_local(program_location)
         } else {
-            self.deploy_remote(fallback_git_location, fallback_file_name)
+            self.deploy_remote(fallback_remote_location, fallback_file_name)
         }
     }
 
@@ -119,13 +119,13 @@ impl<'a> Actor<'a> {
 
     // Grabs executable from git and replicates it in the /solarium directory
     // Then, deploys the program to solana
-    // git_location: url to raw binary (i.e. ../../raw/../something.so)
+    // remote_location: url to raw binary (i.e. ../../raw/../something.so)
     // file_name: local file name via wget
-    pub fn deploy_remote(&self, git_location: &str, file_name: &str) -> Result<Actor, Error> {
+    pub fn deploy_remote(&self, remote_location: &str, file_name: &str) -> Result<Actor, Error> {
         let actor = Actor::new(self.sandbox);
 
         let _get = process::Command::new("wget")
-            .args(["-O", file_name, git_location])
+            .args(["-O", file_name, remote_location])
             .spawn()?
             .wait()?;
 
