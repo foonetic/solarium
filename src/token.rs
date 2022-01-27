@@ -59,10 +59,10 @@ impl<'a> Mint<'a> {
             .send_and_confirm_transaction(&transaction)?;
 
         Ok(Mint {
-            sandbox: sandbox,
-            mint: mint,
-            authority: authority,
-            freeze_authority: freeze_authority,
+            sandbox,
+            mint,
+            authority,
+            freeze_authority,
         })
     }
 
@@ -158,10 +158,7 @@ impl<'a> TokenAccount<'a> {
             .client()
             .send_and_confirm_transaction(&transaction)?;
 
-        Ok(TokenAccount {
-            sandbox: sandbox,
-            account: account,
-        })
+        Ok(TokenAccount { sandbox, account })
     }
 
     /// Returns the underlying account.
