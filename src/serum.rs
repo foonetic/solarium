@@ -236,12 +236,9 @@ impl<'a> Market<'a> {
         let asks = Actor::new(sandbox);
 
         let (vault_address, vault_nonce) = Self::create_vault_address(serum, market.pubkey());
-        let base_vault = TokenAccount::new(&sandbox, actor, &base_mint, Some(&vault_address))?;
-        let quote_vault = TokenAccount::new(&sandbox, actor, &quote_mint, Some(&vault_address))?;
-        let has_authority = match authority {
-            Some(_) => true,
-            None => false,
-        };
+        let base_vault = TokenAccount::new(sandbox, actor, base_mint, Some(&vault_address))?;
+        let quote_vault = TokenAccount::new(sandbox, actor, quote_mint, Some(&vault_address))?;
+        let has_authority = authority.is_some();
 
         // Fetch the size of serum accounts so that we can send create_account
         // instructions with the appropriate sizes.
@@ -307,18 +304,18 @@ impl<'a> Market<'a> {
             .send_and_confirm_transaction(&market_transaction)?;
 
         Ok(Market {
-            sandbox: sandbox,
-            serum: serum,
-            market: market,
-            authority: authority,
-            request_queue: request_queue,
-            event_queue: event_queue,
-            bids: bids,
-            asks: asks,
-            base_vault: base_vault,
-            quote_vault: quote_vault,
-            base_mint: base_mint,
-            quote_mint: quote_mint,
+            sandbox,
+            serum,
+            market,
+            authority,
+            request_queue,
+            event_queue,
+            bids,
+            asks,
+            base_vault,
+            quote_vault,
+            base_mint,
+            quote_mint,
             open_orders_accounts: Vec::new(),
         })
     }
@@ -336,12 +333,12 @@ pub struct Participant<'a> {
 impl<'a> Participant<'a> {
     /// Returns reference to base account.
     pub fn base(&self) -> &Actor {
-        &self.base.account()
+        self.base.account()
     }
 
     /// Returns reference to quote account.
     pub fn quote(&self) -> &Actor {
-        &self.quote.account()
+        self.quote.account()
     }
 
     /// Returns reference to open orders account.

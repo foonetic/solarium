@@ -6,7 +6,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
-use std::{io::Write, process, thread, time};
+use std::{io::Write, path::Path, process, thread, time};
 
 /// Represents a keypair in a parent Sandbox environment.
 pub struct Actor<'a> {
@@ -51,7 +51,7 @@ impl<'a> Actor<'a> {
     }
 
     pub fn sandbox(&self) -> &Sandbox {
-        &self.sandbox
+        self.sandbox
     }
 
     /// Airdrops the given number of lamports to this actor. Blocks until the
@@ -67,6 +67,21 @@ impl<'a> Actor<'a> {
         Ok(())
     }
 
+    /// Attempts to deploy a program if it exists locally. If it does not,
+    /// it will fall back on deploy_remote.
+    pub fn try_deploy_local(
+        &self,
+        program_location: &std::path::Path,
+        fallback_git_location: &str,
+        fallback_file_name: &str,
+    ) -> Result<Actor, Error> {
+        if program_location.exists() {
+            self.deploy_local(program_location)
+        } else {
+            self.deploy_remote(fallback_git_location, fallback_file_name)
+        }
+    }
+
     /// Deploys the given program to the Sandbox. The input path should be an
     /// .so file, typically built with `cargo build-bpf` in a path like
     /// `target/deploy/program.so`. Returns the Actor representing the deployed
@@ -80,9 +95,9 @@ impl<'a> Actor<'a> {
                 "program",
                 "deploy",
                 "--keypair",
-                &self.keyfile().to_str().expect("could not specify keyfile"),
+                self.keyfile().to_str().expect("could not specify keyfile"),
                 "--program-id",
-                &actor.keyfile().to_str().expect("could not specify keyfile"),
+                actor.keyfile().to_str().expect("could not specify keyfile"),
                 "--commitment",
                 "confirmed",
                 "--url",
@@ -109,7 +124,7 @@ impl<'a> Actor<'a> {
     pub fn deploy_remote(&self, git_location: &str, file_name: &str) -> Result<Actor, Error> {
         let actor = Actor::new(self.sandbox);
 
-        let get = process::Command::new("wget")
+        let _get = process::Command::new("wget")
             .args(["-O", file_name, git_location])
             .spawn()?
             .wait()?;
@@ -126,7 +141,7 @@ impl<'a> Actor<'a> {
                 "confirmed",
                 "--url",
                 &self.sandbox.url(),
-                &("./".to_owned() + &file_name),
+                &("./".to_owned() + file_name),
             ])
             .spawn()?
             .wait()?;
