@@ -29,26 +29,11 @@ mod tests {
 
     use std::num::NonZeroU64;
 
-    // #[test]
-    // fn integration() {
-    //     let sandbox = Sandbox::new().unwrap();
-    //     let actor = Actor::new(&sandbox);
-    //     actor.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
-    //     let mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
-    //     let token_account = TokenAccount::new(&sandbox, &actor, &mint, None).unwrap();
-
-    //     let account_info = token_account.get_state().unwrap();
-    //     assert_eq!(0, account_info.amount);
-    //     mint.mint_to(&actor, &token_account, 123).unwrap();
-    //     let account_info = token_account.get_state().unwrap();
-    //     assert_eq!(123, account_info.amount);
-    // }
-
     #[test]
-    fn order_crank_market() {
+    fn integration() {
         let sandbox = Sandbox::new().unwrap();
         println!("sandbox url: {}", sandbox.url());
-        let market_creator = Actor::new(&sandbox);
+        let market_creator = Actor::new(&sandbox).unwrap();
         market_creator.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
         let base_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
         let quote_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
@@ -111,7 +96,6 @@ mod tests {
                 None,
             )
             .unwrap();
-
         println!("Placed bid order.");
 
         let maker_order = market
@@ -132,64 +116,18 @@ mod tests {
 
         println!("Placed ask order.");
 
-        crank_market(&market, &market_creator);
-        settle_funds(&market, &market_creator, &maker);
-        settle_funds(&market, &market_creator, &taker);
+        market
+            .consume_events_loop(&market_creator, 1, 1, String::from("./crank_log.txt"), 6000)
+            .unwrap();
+
+        market.settle_funds(&market_creator, &maker).unwrap();
+        market.settle_funds(&market_creator, &taker).unwrap();
 
         let taker_after_balance: String = get_balance(&taker, &sandbox);
         let maker_after_balance: String = get_balance(&maker, &sandbox);
 
         assert_eq!(taker_after_balance, "1000");
         assert_eq!(maker_after_balance, "500");
-    }
-
-    fn crank_market(market: &Market, market_creator: &Actor) -> () {
-        let consume_events = crank::Command::ConsumeEvents {
-            dex_program_id: *market.serum(),
-            payer: market_creator.keyfile().to_str().unwrap().to_string(),
-            market: *market.market().pubkey(),
-            coin_wallet: *market.base_vault().account().pubkey(),
-            pc_wallet: *market.quote_vault().account().pubkey(),
-            num_workers: 1,
-            events_per_worker: 1,
-            num_accounts: None,
-            log_directory: "./crank_log.txt".to_string(),
-            max_q_length: None,
-            max_wait_for_events_delay: None,
-        };
-
-        let crank_opts = crank::Opts {
-            cluster: serum_common::client::Cluster::Custom(market_creator.sandbox().url()),
-            command: consume_events,
-        };
-
-        thread::spawn(|| {
-            crank::start(crank_opts);
-        });
-
-        println!("Waiting for crank");
-        //crank for 6 seconds
-        sleep(Duration::from_millis(6000));
-        println!("Cranked");
-    }
-
-    fn settle_funds(market: &Market, market_creator: &Actor, side: &Participant) -> () {
-        let settle = crank::Command::SettleFunds {
-            payer: market_creator.keyfile().to_str().unwrap().to_string(),
-            dex_program_id: *market.serum(),
-            market: *market.market().pubkey(),
-            orders: *side.open_orders().pubkey(),
-            coin_wallet: *market.base_vault().account().pubkey(),
-            pc_wallet: *market.quote_vault().account().pubkey(),
-            signer: None,
-        };
-
-        let settle_opts = crank::Opts {
-            cluster: serum_common::client::Cluster::Custom(market_creator.sandbox().url()),
-            command: settle,
-        };
-
-        crank::start(settle_opts);
     }
 
     fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
@@ -204,39 +142,4 @@ mod tests {
             .unwrap()
             .amount
     }
-
-    /*
-    #[test]
-    fn serum_v2() {
-        let sandbox = Sandbox::new().unwrap();
-        let actor = Actor::new(&sandbox);
-        actor.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
-        let base_mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
-        let quote_mint = Mint::new(&sandbox, &actor, 0, None, None).unwrap();
-        let serum_program = actor
-            .deploy(&std::path::Path::new(
-                "/home/yfang/serum-dex/dex/target/deploy/serum_dex.so",
-            ))
-            .unwrap();
-
-        let market = solarium::serum::Market::new(
-            &sandbox,
-            &actor,
-            serum_program.pubkey(),
-            &base_mint,
-            &quote_mint,
-            Some(actor.pubkey()),
-            1,
-            1,
-            100,
-            128,
-            128,
-            256,
-        )
-        .unwrap();
-
-        let _market_maker =
-            Participant::new(&sandbox, &actor, &market, 10 * LAMPORTS_PER_SOL, 1000, 2000).unwrap();
-    }
-    */
 }
