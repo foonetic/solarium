@@ -1,5 +1,5 @@
 use crate::actor::Actor;
-use crate::errors::Error;
+use crate::errors::{Error, Result};
 use crate::sandbox::Sandbox;
 use crate::token::{Mint, TokenAccount};
 use bytemuck;
@@ -10,6 +10,9 @@ use serum_dex::{
 };
 use solana_sdk::pubkey::Pubkey;
 use std::num::NonZeroU64;
+use std::thread;
+use std::thread::sleep;
+use std::time::Duration;
 
 /// Represents a Serum market. This is a V2 market if there is an authority
 /// specified, otherwise a V1 market.
@@ -30,6 +33,256 @@ pub struct Market<'a> {
 }
 
 impl<'a> Market<'a> {
+    /// Creates and initializes a serum market. Creation is funded by the given
+    /// actor. If an authority is provided then a V2 market is created.
+    /// Otherwise, a V1 market is created.
+    pub fn new(
+        sandbox: &'a Sandbox,
+        actor: &'a Actor,
+        serum: &'a Pubkey,
+        base_mint: &'a Mint,
+        quote_mint: &'a Mint,
+        authority: Option<&'a Pubkey>,
+        base_lot_size: u64,
+        quote_lot_size: u64,
+        dust_threshold: u64,
+        request_queue_size: usize,
+        event_queue_size: usize,
+        book_size: usize,
+    ) -> Result<Self> {
+        // Make sure that certain accounts meet the minimum size requirements for allocation
+        if request_queue_size == 0 {
+            return Err(Error::from(serum_dex::error::DexError::from(
+                serum_dex::error::DexErrorCode::RequestQueueEmpty,
+            )));
+        }
+        if event_queue_size < 128 {
+            return Err(Error::from(serum_dex::error::DexError::from(
+                serum_dex::error::DexErrorCode::EventQueueTooSmall,
+            )));
+        }
+        if book_size <= 200 {
+            return Err(Error::from(serum_dex::error::DexError::from(
+                serum_dex::error::DexErrorCode::SlabTooSmall,
+            )));
+        }
+
+        let market = Actor::new(sandbox)?;
+        let request_queue = Actor::new(sandbox)?;
+        let event_queue = Actor::new(sandbox)?;
+        let bids = Actor::new(sandbox)?;
+        let asks = Actor::new(sandbox)?;
+
+        let (vault_address, vault_nonce) = Self::create_vault_address(serum, market.pubkey());
+        let base_vault = TokenAccount::new(sandbox, actor, base_mint, Some(&vault_address))?;
+        let quote_vault = TokenAccount::new(sandbox, actor, quote_mint, Some(&vault_address))?;
+        let has_authority = authority.is_some();
+
+        // Fetch the size of serum accounts so that we can send create_account
+        // instructions with the appropriate sizes.
+        let book_size = Self::side_size(book_size);
+        let sized_accounts = vec![
+            (market.pubkey(), Self::market_size(has_authority)),
+            (
+                request_queue.pubkey(),
+                Self::request_queue_size(request_queue_size),
+            ),
+            (
+                event_queue.pubkey(),
+                Self::event_queue_size(event_queue_size),
+            ),
+            (bids.pubkey(), book_size),
+            (asks.pubkey(), book_size),
+        ];
+
+        // Bundle create_account instructions
+        let mut instructions = Vec::new();
+        for (pubkey, len) in sized_accounts.iter() {
+            instructions.push(actor.create_account(pubkey, *len, serum)?);
+        }
+
+        // Trail with market initialization
+        instructions.push(serum_dex::instruction::initialize_market(
+            market.pubkey(),
+            serum,
+            base_mint.actor().pubkey(),
+            quote_mint.actor().pubkey(),
+            base_vault.account().pubkey(),
+            quote_vault.account().pubkey(),
+            authority,
+            authority,
+            authority,
+            bids.pubkey(),
+            asks.pubkey(),
+            request_queue.pubkey(),
+            event_queue.pubkey(),
+            base_lot_size,
+            quote_lot_size,
+            vault_nonce,
+            dust_threshold,
+        )?);
+
+        sandbox.send_signed_transaction_with_payers(
+            &instructions,
+            Some(actor.pubkey()),
+            vec![
+                actor.keypair(),
+                market.keypair(),
+                request_queue.keypair(),
+                event_queue.keypair(),
+                bids.keypair(),
+                asks.keypair(),
+            ],
+        )?;
+
+        Ok(Market {
+            sandbox,
+            serum,
+            market,
+            authority,
+            request_queue,
+            event_queue,
+            bids,
+            asks,
+            base_vault,
+            quote_vault,
+            base_mint,
+            quote_mint,
+            open_orders_accounts: Vec::new(),
+        })
+    }
+
+    /// Creates a new order and pushes it to the sandbox -
+    /// will fail if the transaction does not go through.
+    /// It is important to note that matching occurs at this state
+    /// inside of Serum itself in V3, however, in earlier versions,
+    /// this does not occur until requests are popped off of the request queue.
+    pub fn new_order(
+        &self,
+        payer: &Actor<'a>,
+        participant: &Participant<'a>,
+        side: Side,
+        limit_price: NonZeroU64,
+        order_type: OrderType,
+        max_base_qty: NonZeroU64,
+        client_order_id: u64,
+        self_trade_behavior: SelfTradeBehavior,
+        limit: u16,
+        max_native_quote_including_fees: NonZeroU64,
+        srm_account_referral: Option<&Pubkey>,
+    ) -> Result<()> {
+        let new_order_instruction = serum_dex::instruction::new_order(
+            self.market.pubkey(),
+            participant.open_orders().pubkey(),
+            self.request_queue.pubkey(),
+            self.event_queue.pubkey(),
+            self.bids.pubkey(),
+            self.asks.pubkey(),
+            payer.pubkey(),
+            participant.account().pubkey(),
+            self.base_vault.account().pubkey(),
+            self.quote_vault.account().pubkey(),
+            &spl_token::ID,
+            &solana_program::sysvar::rent::ID,
+            srm_account_referral,
+            self.serum,
+            side,
+            limit_price,
+            max_base_qty,
+            order_type,
+            client_order_id,
+            self_trade_behavior,
+            limit,
+            max_native_quote_including_fees,
+        )?;
+
+        self.sandbox.send_signed_transaction_with_payers(
+            &[new_order_instruction],
+            Some(participant.account.pubkey()),
+            vec![participant.account.keypair()],
+        )
+    }
+
+    /// Spin up consume_events_loop on another thread and kill it after
+    /// crank_for_ms milliseconds.
+    pub fn consume_events_loop(
+        &self,
+        cranker: &Actor,
+        num_workers: usize,
+        events_per_worker: usize,
+        log_directory: String,
+        crank_for_ms: u64,
+    ) -> Result<()> {
+        let payer = cranker
+            .keyfile()
+            .to_str()
+            .ok_or_else(|| {
+                Error::InputOutputError(std::io::Error::from(std::io::ErrorKind::NotFound))
+            })?
+            .to_string();
+
+        let consume_events_command = crank::Command::ConsumeEvents {
+            dex_program_id: *self.serum,
+            payer,
+            market: *self.market.pubkey(),
+            coin_wallet: *self.base_vault.account().pubkey(),
+            pc_wallet: *self.quote_vault.account().pubkey(),
+            num_workers,
+            events_per_worker,
+            num_accounts: None,
+            log_directory,
+            max_q_length: None,
+            max_wait_for_events_delay: None,
+        };
+
+        let crank_opts = crank::Opts {
+            cluster: serum_common::client::Cluster::Custom(cranker.sandbox().url()),
+            command: consume_events_command,
+        };
+
+        // For some reason, when unwrapped, crank_opts panics saying that the market pubkey
+        // is not found. Despite this, it still works. I need to look into why this is.
+        thread::spawn(|| {
+            crank::start(crank_opts);
+        });
+
+        sleep(Duration::from_millis(crank_for_ms));
+
+        Ok(())
+    }
+
+    /// Cranker settles funds for a particular participant by invoking crank::start
+    pub fn settle_funds(&self, cranker: &Actor, participant: &Participant) -> Result<()> {
+        let payer = cranker
+            .keyfile()
+            .to_str()
+            .ok_or_else(|| {
+                Error::InputOutputError(std::io::Error::from(std::io::ErrorKind::NotFound))
+            })?
+            .to_string();
+
+        let settle_funds_command = crank::Command::SettleFunds {
+            payer,
+            dex_program_id: *self.serum,
+            market: *self.market.pubkey(),
+            orders: *participant.open_orders().pubkey(),
+            coin_wallet: *self.base_vault.account().pubkey(),
+            pc_wallet: *self.quote_vault.account().pubkey(),
+            signer: None,
+        };
+
+        let crank_opts = crank::Opts {
+            cluster: serum_common::client::Cluster::Custom(cranker.sandbox().url()),
+            command: settle_funds_command,
+        };
+
+        // For some reason, when unwrapped, crank_opts panics saying that the market pubkey
+        // is not found. Despite this, it still works. I need to look into why this is.
+        crank::start(crank_opts);
+
+        Ok(())
+    }
+
     /// Returns reference to the Serum program id
     pub fn serum(&self) -> &Pubkey {
         self.serum
@@ -131,194 +384,6 @@ impl<'a> Market<'a> {
             }
         }
     }
-
-    /// Creates a new order and pushes it to the sandbox -
-    /// will will fail if the transaction does not go through.
-    /// It is important to note that matching occurs at this state
-    /// inside of Serum itself in V3, however, in earlier versions,
-    /// this does not occur until requests are popped off of the request queue.
-    pub fn new_order(
-        &self,
-        payer: &Actor<'a>,
-        participant: &Participant<'a>,
-        side: Side,
-        limit_price: NonZeroU64,
-        order_type: OrderType,
-        max_base_qty: NonZeroU64,
-        client_order_id: u64,
-        self_trade_behavior: SelfTradeBehavior,
-        limit: u16,
-        max_native_quote_including_fees: NonZeroU64,
-        srm_account_referral: Option<&Pubkey>,
-    ) -> Result<(), Error> {
-        let mut instructions = Vec::new();
-
-        // Create new order instruction.
-        // The participant pays and is the owner of the open_orders account provided.
-        instructions.push(serum_dex::instruction::new_order(
-            self.market.pubkey(),
-            participant.open_orders().pubkey(),
-            self.request_queue.pubkey(),
-            self.event_queue.pubkey(),
-            self.bids.pubkey(),
-            self.asks.pubkey(),
-            payer.pubkey(),
-            participant.account().pubkey(),
-            self.base_vault.account().pubkey(),
-            self.quote_vault.account().pubkey(),
-            &spl_token::ID,
-            &solana_program::sysvar::rent::ID,
-            srm_account_referral,
-            self.serum,
-            side,
-            limit_price,
-            max_base_qty,
-            order_type,
-            client_order_id,
-            self_trade_behavior,
-            limit,
-            max_native_quote_including_fees,
-        )?);
-
-        // Push transaction to sandbox
-        let recent_hash = self.sandbox.client().get_latest_blockhash()?;
-        let market_transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
-            &instructions,
-            Some(participant.account().pubkey()),
-            &vec![participant.account().keypair()],
-            recent_hash,
-        );
-        self.sandbox
-            .client()
-            .send_and_confirm_transaction(&market_transaction)?;
-
-        Ok(())
-    }
-
-    /// Creates and initializes a serum market. Creation is funded by the given
-    /// actor. If an authority is provided then a V2 market is created.
-    /// Otherwise, a V1 market is created.
-    pub fn new(
-        sandbox: &'a Sandbox,
-        actor: &'a Actor,
-        serum: &'a Pubkey,
-        base_mint: &'a Mint,
-        quote_mint: &'a Mint,
-        authority: Option<&'a Pubkey>,
-        base_lot_size: u64,
-        quote_lot_size: u64,
-        dust_threshold: u64,
-        request_queue_size: usize,
-        event_queue_size: usize,
-        book_size: usize,
-    ) -> Result<Self, Error> {
-        // Make sure that certain accounts meet the minimum size requirements for allocation
-        if request_queue_size == 0 {
-            return Err(Error::from(serum_dex::error::DexError::from(
-                serum_dex::error::DexErrorCode::RequestQueueEmpty,
-            )));
-        }
-        if event_queue_size < 128 {
-            return Err(Error::from(serum_dex::error::DexError::from(
-                serum_dex::error::DexErrorCode::EventQueueTooSmall,
-            )));
-        }
-        if book_size <= 200 {
-            return Err(Error::from(serum_dex::error::DexError::from(
-                serum_dex::error::DexErrorCode::SlabTooSmall,
-            )));
-        }
-
-        let market = Actor::new(sandbox);
-        let request_queue = Actor::new(sandbox);
-        let event_queue = Actor::new(sandbox);
-        let bids = Actor::new(sandbox);
-        let asks = Actor::new(sandbox);
-
-        let (vault_address, vault_nonce) = Self::create_vault_address(serum, market.pubkey());
-        let base_vault = TokenAccount::new(sandbox, actor, base_mint, Some(&vault_address))?;
-        let quote_vault = TokenAccount::new(sandbox, actor, quote_mint, Some(&vault_address))?;
-        let has_authority = authority.is_some();
-
-        // Fetch the size of serum accounts so that we can send create_account
-        // instructions with the appropriate sizes.
-        let book_size = Self::side_size(book_size);
-        let sized_accounts = vec![
-            (market.pubkey(), Self::market_size(has_authority)),
-            (
-                request_queue.pubkey(),
-                Self::request_queue_size(request_queue_size),
-            ),
-            (
-                event_queue.pubkey(),
-                Self::event_queue_size(event_queue_size),
-            ),
-            (bids.pubkey(), book_size),
-            (asks.pubkey(), book_size),
-        ];
-
-        // Bundle create_account instructions
-        let mut instructions = Vec::new();
-        for (pubkey, len) in sized_accounts.iter() {
-            instructions.push(actor.create_account(pubkey, *len, serum)?);
-        }
-
-        // Trail with market initialization
-        instructions.push(serum_dex::instruction::initialize_market(
-            market.pubkey(),
-            serum,
-            base_mint.actor().pubkey(),
-            quote_mint.actor().pubkey(),
-            base_vault.account().pubkey(),
-            quote_vault.account().pubkey(),
-            authority,
-            authority,
-            authority,
-            bids.pubkey(),
-            asks.pubkey(),
-            request_queue.pubkey(),
-            event_queue.pubkey(),
-            base_lot_size,
-            quote_lot_size,
-            vault_nonce,
-            dust_threshold,
-        )?);
-
-        // Push transaction to sandbox
-        let recent_hash = sandbox.client().get_latest_blockhash()?;
-        let market_transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
-            &instructions,
-            Some(actor.pubkey()),
-            &vec![
-                actor.keypair(),
-                market.keypair(),
-                request_queue.keypair(),
-                event_queue.keypair(),
-                bids.keypair(),
-                asks.keypair(),
-            ],
-            recent_hash,
-        );
-        sandbox
-            .client()
-            .send_and_confirm_transaction(&market_transaction)?;
-
-        Ok(Market {
-            sandbox,
-            serum,
-            market,
-            authority,
-            request_queue,
-            event_queue,
-            bids,
-            asks,
-            base_vault,
-            quote_vault,
-            base_mint,
-            quote_mint,
-            open_orders_accounts: Vec::new(),
-        })
-    }
 }
 
 /// Represents a Serum market participant.
@@ -331,26 +396,6 @@ pub struct Participant<'a> {
 }
 
 impl<'a> Participant<'a> {
-    /// Returns reference to base account.
-    pub fn base(&self) -> &Actor {
-        self.base.account()
-    }
-
-    /// Returns reference to quote account.
-    pub fn quote(&self) -> &Actor {
-        self.quote.account()
-    }
-
-    /// Returns reference to open orders account.
-    pub fn open_orders(&self) -> &Actor {
-        &self.open_orders
-    }
-
-    /// Returns reference to underlying account.
-    pub fn account(&self) -> &Actor {
-        &self.account
-    }
-
     /// Constructs a Serum market participant and seeds the participant account
     /// with lamports to drive transactions, as well as some amount of base and
     /// quote tokens.
@@ -361,19 +406,23 @@ impl<'a> Participant<'a> {
         starting_lamports: u64,
         starting_base: u64,
         starting_quote: u64,
-    ) -> Result<Participant<'a>, Error> {
+    ) -> Result<Participant<'a>> {
         // Create a participant actor with initial balance
-        let participant = Actor::new(sandbox);
-        participant.airdrop(starting_lamports)?;
+        let participant_actor = Actor::new(sandbox)?;
+        participant_actor.airdrop(starting_lamports)?;
 
         // Setup base and quote accounts
-        let participant_base =
-            TokenAccount::new(sandbox, payer, market.base_mint, Some(participant.pubkey()))?;
+        let participant_base = TokenAccount::new(
+            sandbox,
+            payer,
+            market.base_mint,
+            Some(participant_actor.pubkey()),
+        )?;
         let participant_quote = TokenAccount::new(
             sandbox,
             payer,
             market.quote_mint,
-            Some(participant.pubkey()),
+            Some(participant_actor.pubkey()),
         )?;
 
         // Mint amounts to base & quote token accounts
@@ -389,7 +438,7 @@ impl<'a> Participant<'a> {
         }
 
         // Create open orders account
-        let participant_open_orders = Actor::new(sandbox);
+        let participant_open_orders = Actor::new(sandbox)?;
         let open_orders_size = std::mem::size_of::<serum_dex::state::OpenOrders>()
             + serum_state::ACCOUNT_HEAD_PADDING.len()
             + serum_state::ACCOUNT_TAIL_PADDING.len();
@@ -409,33 +458,47 @@ impl<'a> Participant<'a> {
         let init_open_orders = serum_dex::instruction::init_open_orders(
             market.serum,
             participant_open_orders.pubkey(),
-            participant.pubkey(),
+            participant_actor.pubkey(),
             market.market.pubkey(),
             None,
         )?;
 
-        // Push transaction to the sandbox
-        let recent_hash = sandbox.client().get_latest_blockhash()?;
-        let transaction = solana_sdk::transaction::Transaction::new_signed_with_payer(
+        sandbox.send_signed_transaction_with_payers(
             &[create_open_orders, init_open_orders],
             Some(payer.pubkey()),
-            &vec![
+            vec![
                 payer.keypair(),
                 participant_open_orders.keypair(),
-                participant.keypair(),
+                participant_actor.keypair(),
             ],
-            recent_hash,
-        );
-        sandbox
-            .client()
-            .send_and_confirm_transaction(&transaction)?;
+        )?;
 
         Ok(Participant {
-            market: &market,
+            market,
             base: participant_base,
             quote: participant_quote,
             open_orders: participant_open_orders,
-            account: participant,
+            account: participant_actor,
         })
+    }
+
+    /// Returns reference to base account.
+    pub fn base(&self) -> &Actor {
+        self.base.account()
+    }
+
+    /// Returns reference to quote account.
+    pub fn quote(&self) -> &Actor {
+        self.quote.account()
+    }
+
+    /// Returns reference to open orders account.
+    pub fn open_orders(&self) -> &Actor {
+        &self.open_orders
+    }
+
+    /// Returns reference to underlying account.
+    pub fn account(&self) -> &Actor {
+        &self.account
     }
 }

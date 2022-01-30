@@ -5,3 +5,5 @@ pub enum Error {
     InputOutputError(std::io::Error),
     SerumDexError(serum_dex::error::DexError),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

@@ -1,6 +1,10 @@
+use crate::errors::{Error, Result};
 use portpicker;
 use solana_client::rpc_client;
-use std::{io, process, thread, time};
+use solana_sdk::{
+    instruction::Instruction, pubkey::Pubkey, signer::keypair::Keypair, transaction::Transaction,
+};
+use std::{io, path::Path, process, thread, time};
 use tempfile;
 
 /// Represents a Solana test environment.
@@ -16,11 +20,13 @@ pub struct Sandbox {
 
 impl Sandbox {
     /// Creates a Sandbox and blocks until the RPC server is ready to use.
-    pub fn new() -> Result<Self, io::Error> {
+    pub fn new() -> Result<Self> {
         let tmp = tempfile::Builder::new().prefix("solarium").tempdir()?;
         let port = portpicker::pick_unused_port();
         if port.is_none() {
-            return Err(io::Error::from(io::ErrorKind::AddrNotAvailable));
+            return Err(Error::from(io::Error::from(
+                io::ErrorKind::AddrNotAvailable,
+            )));
         }
 
         let port = port.expect("could not get port");
@@ -50,10 +56,10 @@ impl Sandbox {
         }
 
         Ok(Self {
-            tmp: tmp,
-            validator: validator,
-            port: port,
-            client: client,
+            tmp,
+            validator,
+            port,
+            client,
         })
     }
 
@@ -73,8 +79,33 @@ impl Sandbox {
     }
 
     /// Returns a temporary directory associated with this Sandbox.
-    pub fn tmpdir(&self) -> &std::path::Path {
+    pub fn tmpdir(&self) -> &Path {
         self.tmp.as_ref()
+    }
+
+    /// Create & send signed transaction with payers from instructions
+    pub fn send_signed_transaction_with_payers(
+        &self,
+        instructions: &[Instruction],
+        payer: Option<&Pubkey>,
+        signers: Vec<&Keypair>,
+    ) -> Result<()> {
+        let recent_hash = self.client.get_latest_blockhash()?;
+        let transaction =
+            Transaction::new_signed_with_payer(instructions, payer, &signers, recent_hash);
+        self.client.send_and_confirm_transaction(&transaction)?;
+        Ok(())
+    }
+
+    /// Create & send transaction with payers from instructions
+    pub fn send_transaction_with_payer(
+        &self,
+        instructions: &[Instruction],
+        payer: Option<&Pubkey>,
+    ) -> Result<()> {
+        let transaction = Transaction::new_with_payer(instructions, payer);
+        self.client.send_and_confirm_transaction(&transaction)?;
+        Ok(())
     }
 }
 

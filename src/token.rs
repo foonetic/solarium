@@ -1,8 +1,8 @@
 use crate::actor::Actor;
-use crate::errors::Error;
+use crate::errors::Result;
 use crate::sandbox::Sandbox;
 use solana_program::program_pack::Pack;
-use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use solana_sdk::pubkey::Pubkey;
 use spl_token::{self, instruction as spl_instruction, state as spl_state};
 
 /// Represents an spl_token program Mint.
@@ -24,8 +24,8 @@ impl<'a> Mint<'a> {
         decimals: u8,
         authority: Option<&'a Actor>,
         freeze_authority: Option<&'a Actor>,
-    ) -> Result<Mint<'a>, Error> {
-        let mint = Actor::new(sandbox);
+    ) -> Result<Mint<'a>> {
+        let mint = Actor::new(sandbox)?;
 
         let authority = match authority {
             Some(auth) => auth,
@@ -47,16 +47,11 @@ impl<'a> Mint<'a> {
             decimals,
         )?;
 
-        let recent_hash = sandbox.client().get_latest_blockhash()?;
-        let transaction = Transaction::new_signed_with_payer(
+        sandbox.send_signed_transaction_with_payers(
             &[create_account, initialize_mint],
             Some(actor.pubkey()),
-            &[actor.keypair(), mint.keypair()],
-            recent_hash,
-        );
-        sandbox
-            .client()
-            .send_and_confirm_transaction(&transaction)?;
+            vec![actor.keypair(), mint.keypair()],
+        )?;
 
         Ok(Mint {
             sandbox,
@@ -84,12 +79,7 @@ impl<'a> Mint<'a> {
     /// The given Actor mints an amount into the provided token account. Note
     /// that this instruction is always signed by the mint authority, even if
     /// the input actor doesn't have minting authority.
-    pub fn mint_to(
-        &self,
-        actor: &Actor,
-        destination: &TokenAccount,
-        amount: u64,
-    ) -> Result<(), Error> {
+    pub fn mint_to(&self, actor: &Actor, destination: &TokenAccount, amount: u64) -> Result<()> {
         let instruction = spl_instruction::mint_to(
             &spl_token::id(),
             self.mint.pubkey(),
@@ -99,18 +89,11 @@ impl<'a> Mint<'a> {
             amount,
         )?;
 
-        let recent_hash = self.sandbox.client().get_latest_blockhash()?;
-        let transaction = Transaction::new_signed_with_payer(
+        self.sandbox.send_signed_transaction_with_payers(
             &[instruction],
             Some(actor.pubkey()),
-            &[actor.keypair(), self.authority.keypair()],
-            recent_hash,
-        );
-        self.sandbox
-            .client()
-            .send_and_confirm_transaction(&transaction)?;
-
-        Ok(())
+            vec![actor.keypair(), self.authority.keypair()],
+        )
     }
 }
 
@@ -130,8 +113,8 @@ impl<'a> TokenAccount<'a> {
         actor: &'a Actor,
         mint: &'a Mint,
         owner: Option<&'b Pubkey>,
-    ) -> Result<TokenAccount<'a>, Error> {
-        let account = Actor::new(sandbox);
+    ) -> Result<TokenAccount<'a>> {
+        let account = Actor::new(sandbox)?;
 
         let owner = match owner {
             Some(person) => person,
@@ -147,16 +130,11 @@ impl<'a> TokenAccount<'a> {
             owner,
         )?;
 
-        let recent_hash = sandbox.client().get_latest_blockhash()?;
-        let transaction = Transaction::new_signed_with_payer(
+        sandbox.send_signed_transaction_with_payers(
             &[create_account, initialize_account],
             Some(actor.pubkey()),
-            &[actor.keypair(), account.keypair()],
-            recent_hash,
-        );
-        sandbox
-            .client()
-            .send_and_confirm_transaction(&transaction)?;
+            vec![actor.keypair(), account.keypair()],
+        )?;
 
         Ok(TokenAccount { sandbox, account })
     }
@@ -166,8 +144,8 @@ impl<'a> TokenAccount<'a> {
         &self.account
     }
 
-    /// Returns the current state of the account.
-    pub fn get_state(&self) -> Result<spl_token::state::Account, Error> {
+    /// Returns the account information
+    pub fn get_account_info(&self) -> Result<spl_token::state::Account> {
         let data = self
             .sandbox
             .client()
