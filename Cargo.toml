@@ -13,8 +13,7 @@ serde_json = "1.0"
 clap = "= 3.0.0-beta.1" # must be pinned because of serum-dex/crank clap dependency
 clap_derive = "= 3.0.0-beta.1" # must be pinned because of serum-dex/crank clap dependency
 
-serum-common = { path = "../serum-dex/common", features = ["client"] }
-crank = { path = "../serum-dex/dex/crank" }
+serum-common = { git = "https://github.com/project-serum/serum-dex", tag = "v0.5.4", features = ["client"] }
 solana-logger = "1.9.3"
 serum_dex = "0.5.0"
 

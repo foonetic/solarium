@@ -16,6 +16,30 @@ mod tests {
         matching::{OrderType, Side},
     };
 
+    #[derive(BorshSerialize, BorshDeserialize, Debug, Copy, Clone)]
+    pub struct OpenOrders {
+        pub serum_head_padding: [u8; 5],
+
+        pub account_flags: u64, // Initialized, OpenOrders
+        pub market: [u64; 4],
+        pub owner: [u64; 4],
+
+        pub native_coin_free: u64,
+        pub native_coin_total: u64,
+
+        pub native_pc_free: u64,
+        pub native_pc_total: u64,
+
+        pub free_slot_bits: u128,
+        pub is_bid_bits: u128,
+        pub orders: [u128; 128],
+        // Using Option<NonZeroU64> in a pod type requires nightly
+        pub client_order_ids: [u64; 128],
+        pub referrer_rebates_accrued: u64,
+
+        pub serum_tail_padding: [u8; 7],
+    }
+
     #[test]
     fn integration() {
         let sandbox = Sandbox::new().unwrap();
@@ -73,7 +97,7 @@ mod tests {
                 &taker.quote(),
                 &taker,
                 Side::Bid,
-                NonZeroU64::new(200).unwrap(),
+                NonZeroU64::new(20).unwrap(),
                 OrderType::Limit,
                 NonZeroU64::new(500).unwrap(),
                 1,
@@ -90,31 +114,48 @@ mod tests {
                 &maker.base(),
                 &maker,
                 Side::Ask,
-                NonZeroU64::new(200).unwrap(),
+                NonZeroU64::new(20).unwrap(),
                 OrderType::Limit,
-                NonZeroU64::new(500).unwrap(),
+                NonZeroU64::new(400).unwrap(),
                 1,
                 SelfTradeBehavior::DecrementTake,
                 1,
-                NonZeroU64::new(300).unwrap(),
+                NonZeroU64::new(500).unwrap(),
                 None,
             )
             .unwrap();
 
         println!("Placed ask order.");
 
-        market
-            .consume_events_loop(&market_creator, 1, 1, String::from("./crank_log.txt"), 6000)
+        let maker_oo_info = sandbox
+            .client()
+            .get_account(maker.open_orders().pubkey())
             .unwrap();
+        let maker_oo_data: OpenOrders =
+            OpenOrders::try_from_slice(&maker_oo_info.data.borrow()).unwrap();
+        let maker_order_id: u128 = maker_oo_data.orders[0];
 
-        market.settle_funds(&market_creator, &maker).unwrap();
-        market.settle_funds(&market_creator, &taker).unwrap();
+        market.cancel_order(&market_creator, &maker, Side::Ask, maker_order_id);
 
-        let taker_after_balance: String = get_balance(&taker, &sandbox);
-        let maker_after_balance: String = get_balance(&maker, &sandbox);
+        market.consume_events(
+            &market_creator,
+            vec![maker.open_orders().pubkey(), taker.open_orders().pubkey()],
+            10,
+        );
 
-        assert_eq!(taker_after_balance, "1000");
-        assert_eq!(maker_after_balance, "500");
+        market.settle_funds(&market_creator, &taker);
+        market.settle_funds(&market_creator, &maker);
+
+        let end_maker_b = get_pubkey_balance(maker.base().pubkey(), &sandbox);
+        let end_taker_b = get_pubkey_balance(taker.base().pubkey(), &sandbox);
+
+        let end_maker_q = get_pubkey_balance(maker.quote().pubkey(), &sandbox);
+        let end_taker_q = get_pubkey_balance(taker.quote().pubkey(), &sandbox);
+
+        assert_eq!(end_maker_b, "985");
+        assert_eq!(end_taker_b, "1015");
+        assert_eq!(end_maker_q, "2299");
+        assert_eq!(end_taker_q, "1700");
     }
 
     fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
