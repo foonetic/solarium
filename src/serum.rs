@@ -210,82 +210,79 @@ impl<'a> Market<'a> {
 
     /// Spin up consume_events_loop on another thread and kill it after
     /// crank_for_ms milliseconds.
-    pub fn consume_events_loop(
+    pub fn consume_events(
         &self,
-        cranker: &Actor,
-        num_workers: usize,
-        events_per_worker: usize,
-        log_directory: String,
-        crank_for_ms: u64,
+        payer: &Actor,
+        open_orders: Vec<&Pubkey>,
+        num_events: u16,
     ) -> Result<()> {
-        let payer = cranker
-            .keyfile()
-            .to_str()
-            .ok_or_else(|| {
-                Error::InputOutputError(std::io::Error::from(std::io::ErrorKind::NotFound))
-            })?
-            .to_string();
+        let consume_events = serum_dex::instruction::consume_events(
+            self.serum(),
+            open_orders,
+            self.market().pubkey(),
+            self.event_queue().pubkey(),
+            self.base_vault().account().pubkey(),
+            self.quote_vault().account().pubkey(),
+            num_events,
+        )
+        .unwrap();
 
-        let consume_events_command = crank::Command::ConsumeEvents {
-            dex_program_id: *self.serum,
-            payer,
-            market: *self.market.pubkey(),
-            coin_wallet: *self.base_vault.account().pubkey(),
-            pc_wallet: *self.quote_vault.account().pubkey(),
-            num_workers,
-            events_per_worker,
-            num_accounts: None,
-            log_directory,
-            max_q_length: None,
-            max_wait_for_events_delay: None,
-        };
-
-        let crank_opts = crank::Opts {
-            cluster: serum_common::client::Cluster::Custom(cranker.sandbox().url()),
-            command: consume_events_command,
-        };
-
-        // For some reason, when unwrapped, crank_opts panics saying that the market pubkey
-        // is not found. Despite this, it still works. I need to look into why this is.
-        thread::spawn(|| {
-            crank::start(crank_opts);
-        });
-
-        sleep(Duration::from_millis(crank_for_ms));
-
-        Ok(())
+        self.sandbox.send_signed_transaction_with_payers(
+            &[consume_events],
+            Some(payer.pubkey()),
+            vec![payer.keypair()],
+        )
     }
 
     /// Cranker settles funds for a particular participant by invoking crank::start
-    pub fn settle_funds(&self, cranker: &Actor, participant: &Participant) -> Result<()> {
-        let payer = cranker
-            .keyfile()
-            .to_str()
-            .ok_or_else(|| {
-                Error::InputOutputError(std::io::Error::from(std::io::ErrorKind::NotFound))
-            })?
-            .to_string();
+    pub fn settle_funds(&self, payer: &Actor, participant: &Participant) -> Result<()> {
+        let settle_funds = serum_dex::instruction::settle_funds(
+            self.serum(),
+            self.market().pubkey(),
+            &spl_token::ID,
+            participant.open_orders.pubkey(),
+            participant.account().pubkey(),
+            self.base_vault().account().pubkey(),
+            participant.base().pubkey(),
+            self.quote_vault().account().pubkey(),
+            participant.quote().pubkey(),
+            None,
+            self.vault_signer_key(),
+        )
+        .unwrap();
 
-        let settle_funds_command = crank::Command::SettleFunds {
-            payer,
-            dex_program_id: *self.serum,
-            market: *self.market.pubkey(),
-            orders: *participant.open_orders().pubkey(),
-            coin_wallet: *self.base_vault.account().pubkey(),
-            pc_wallet: *self.quote_vault.account().pubkey(),
-            signer: None,
-        };
+        self.sandbox.send_signed_transaction_with_payers(
+            &[settle_funds],
+            Some(payer.pubkey()),
+            vec![payer.keypair(), participant.account().keypair()],
+        )
+    }
 
-        let crank_opts = crank::Opts {
-            cluster: serum_common::client::Cluster::Custom(cranker.sandbox().url()),
-            command: settle_funds_command,
-        };
+    pub fn cancel_order(
+        &self,
+        payer: &Actor,
+        participant: &Participant,
+        side: Side,
+        order_id: u128,
+    ) -> Result<()> {
+        let cancel_order = serum_dex::instruction::cancel_order(
+            self.serum(),
+            self.market().pubkey(),
+            self.bids().pubkey(),
+            self.asks().pubkey(),
+            participant.open_orders().pubkey(),
+            participant.account().pubkey(),
+            self.event_queue().pubkey(),
+            side,
+            order_id,
+        )
+        .unwrap();
 
-        // For some reason, when unwrapped, crank_opts panics saying that the market pubkey
-        // is not found. Despite this, it still works. I need to look into why this is.
-        crank::start(crank_opts);
-
-        Ok(())
+        self.sandbox.send_signed_transaction_with_payers(
+            &[cancel_order],
+            Some(payer.pubkey()),
+            vec![payer.keypair(), participant.account().keypair()],
+        )
     }
 
     /// Returns reference to the Serum program id
