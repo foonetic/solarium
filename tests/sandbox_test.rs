@@ -16,6 +16,12 @@ mod tests {
         matching::{OrderType, Side},
     };
 
+    use std::thread::sleep;
+
+    use std::time::Duration;
+
+    use std::fs;
+
     #[derive(BorshSerialize, BorshDeserialize, Debug, Copy, Clone)]
     pub struct OpenOrders {
         pub serum_head_padding: [u8; 5],
@@ -38,6 +44,77 @@ mod tests {
         pub referrer_rebates_accrued: u64,
 
         pub serum_tail_padding: [u8; 7],
+    }
+
+    #[test]
+    fn mm_bot() {
+        let sandbox = Sandbox::new().unwrap();
+        println!("sandbox url: {}", sandbox.url());
+        let market_creator = Actor::new(&sandbox).unwrap();
+        market_creator.airdrop(10000 * LAMPORTS_PER_SOL).unwrap();
+        let base_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
+        let quote_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
+        let serum_program = market_creator
+            .deploy_remote(
+                "https://github.com/foonetic/solarium-deps/raw/main/serum_dex.so",
+                "serum_dex.so",
+            )
+            .unwrap();
+
+        let market = solarium::serum::Market::new(
+            &sandbox,
+            &market_creator,
+            serum_program.pubkey(),
+            &base_mint,
+            &quote_mint,
+            None,
+            1,
+            1,
+            100,
+            128,
+            128,
+            256,
+        )
+        .unwrap();
+
+        let maker = Participant::new(
+            &sandbox,
+            &market_creator,
+            &market,
+            10000 * LAMPORTS_PER_SOL,
+            100000,
+            100000,
+        )
+        .unwrap();
+
+        let mm = Participant::new(
+            &sandbox,
+            &market_creator,
+            &market,
+            10000 * LAMPORTS_PER_SOL,
+            1000000000000,
+            1000000000000,
+        )
+        .unwrap();
+
+        let data = format!(
+            "{}\n{}\n{}\n{:?}\n{}\n{}\n{:?}\n{}\n{}",
+            sandbox.url(),
+            market.market().pubkey().to_string(),
+            serum_program.pubkey().to_string(),
+            mm.account().keypair().to_bytes(),
+            mm.quote().pubkey(),
+            mm.base().pubkey(),
+            maker.account().keypair().to_bytes(),
+            maker.quote().pubkey(),
+            maker.base().pubkey(),
+        );
+
+        fs::write("mm_keys.txt", data).expect("Unable to write file");
+
+        println!("Made market.");
+
+        sleep(Duration::from_millis(1000000000000000000));
     }
 
     #[test]
