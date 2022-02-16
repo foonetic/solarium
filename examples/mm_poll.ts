@@ -293,7 +293,7 @@ function delay(ms: number) {
 }
 
 // Market setup && MM init
-let text = fs.readFileSync('../mm_keys.txt','utf8');
+let text = fs.readFileSync(__dirname + "/mm_keys.txt",'utf8');
 let tbl = text.split("\n");
 
 
