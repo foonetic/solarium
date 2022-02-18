@@ -23,13 +23,21 @@ impl Sandbox {
     pub fn new() -> Result<Self> {
         let tmp = tempfile::Builder::new().prefix("solarium").tempdir()?;
         let port = portpicker::pick_unused_port();
+        let faucet = portpicker::pick_unused_port();
         if port.is_none() {
             return Err(Error::from(io::Error::from(
                 io::ErrorKind::AddrNotAvailable,
             )));
         }
 
+        if faucet.is_none() {
+            return Err(Error::from(io::Error::from(
+                io::ErrorKind::AddrNotAvailable,
+            )));
+        }
+
         let port = port.expect("could not get port");
+        let faucet = faucet.expect("could not get faucet");
         let validator = process::Command::new("solana-test-validator")
             .args([
                 "--ledger",
@@ -40,6 +48,8 @@ impl Sandbox {
                     .expect("could not get tmp path"),
                 "--rpc-port",
                 &port.to_string(),
+                "--faucet-port",
+                &faucet.to_string(),
             ])
             .stdout(std::process::Stdio::null())
             .spawn()?;
