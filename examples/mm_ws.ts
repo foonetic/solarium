@@ -3,7 +3,7 @@ import { Market, Orderbook } from '@project-serum/serum';
 import * as fs from 'fs';
 import BN from 'bn.js';
 import { Order } from '@project-serum/serum/lib/market';
-import { OrderState, throwIfNull } from './engine';
+import { OrderState, throwIfNull, throwIfUndefined } from './engine';
 import { REQUEST_QUEUE_LAYOUT } from '@project-serum/serum';
 import { blob, seq, struct, u8, u32 } from 'buffer-layout';
 import {
@@ -35,6 +35,7 @@ export interface MarketMaker {
     initialize_positions(): Promise<[OrderState[], OrderState[], OrderState[]]> ;
     onBook(bids : OrderState[], asks : OrderState[], mm_state : OrderState[]): Promise<OrderState[]>;
     onFill(): void;
+    update_seq_num(sqbuf : Buffer);
 }
 
 export class SimpleMarketMaker implements MarketMaker {
@@ -63,7 +64,7 @@ export class SimpleMarketMaker implements MarketMaker {
         this.init_ct = 0;
     }
 
-    async placeOrder(side : string, price : number, qty : number) {
+    async placeOrder(clientID: BN, side : string, price : number, qty : number) {
         if(side != "buy" && side != "sell") throw new TypeError("Invalid Side");
 
         let market = this.market;
@@ -74,6 +75,7 @@ export class SimpleMarketMaker implements MarketMaker {
                 {
                     owner: this.mm_owner,
                     payer: this.mm_quote,
+                    clientId: clientID,
                     side: 'buy',
                     price: price,
                     size: qty,
@@ -87,6 +89,7 @@ export class SimpleMarketMaker implements MarketMaker {
                 {
                     owner: this.mm_owner,
                     payer: this.mm_base,
+                    clientId: clientID,
                     side: 'sell',
                     price: price,
                     size: qty,
@@ -98,15 +101,14 @@ export class SimpleMarketMaker implements MarketMaker {
     }
 
     async cancelOrder(orderId : BN, side: 'buy' | 'sell') {
-        let instr = DexInstructions.cancelOrderV2({
+        let instr = DexInstructions.cancelOrderByClientIdV2({
             market: this.market_addr,
             bids: this.market_bids,
             asks: this.market_asks,
             eventQueue: this.event_q,
             openOrders: this.open_orders,
             owner: this.mm_owner.publicKey,
-            side: side,
-            orderId: orderId,
+            clientId: orderId,
             programId: this.market.programId,
         });
         const transaction = new Transaction();
@@ -151,7 +153,7 @@ export class SimpleMarketMaker implements MarketMaker {
         for(let bid of bids) {
             if(bid.openOrdersAddress.equals(this.open_orders)) {
                 cur_mm_bb = Math.max(cur_mm_bb, bid.price);
-                mm_orders.push(new OrderState(bid.orderId, bid.side, bid.price, bid.size));
+                mm_orders.push(new OrderState(throwIfUndefined (bid.clientId), bid.side, bid.price, bid.size));
             }
             bid_state.push(new OrderState(bid.orderId, bid.side, bid.price, bid.size));
             book_bb = Math.max(book_bb, bid.price)
@@ -159,7 +161,7 @@ export class SimpleMarketMaker implements MarketMaker {
         for(let ask of asks) {
             if(ask.openOrdersAddress.equals(this.open_orders)) { 
                 cur_mm_ba = Math.min(cur_mm_ba, ask.price);
-                mm_orders.push(new OrderState(ask.orderId, ask.side, ask.price, ask.size));
+                mm_orders.push(new OrderState(throwIfUndefined (ask.clientId), ask.side, ask.price, ask.size));
             }
             ask_state.push(new OrderState(ask.orderId, ask.side, ask.price, ask.size));
             book_ba = Math.min(book_ba, ask.price);
@@ -169,17 +171,17 @@ export class SimpleMarketMaker implements MarketMaker {
         book_ba = (book_ba == Number.MAX_SAFE_INTEGER) ? MIN_ASK : book_ba;
 
         if(cur_mm_bb == Number.MIN_SAFE_INTEGER) {
-            let bid_placed = await this.placeOrder("buy", book_bb, 100);
-            let orderID = calc_order_id(book_bb, 'buy', this.seq_num);
-            mm_orders.push(new OrderState(orderID, 'buy', book_bb, 100));
+            let clientID = this.gen_client_id(book_bb, 'buy');
+            let bid_placed = await this.placeOrder(clientID, "buy", book_bb, 100);
+            mm_orders.push(new OrderState(clientID, 'buy', book_bb, 100));
             this.seq_num++;
         }
         this.bid_pos = book_bb;
 
         if(cur_mm_ba == Number.MAX_SAFE_INTEGER) {
-            let ask_placed = await this.placeOrder("sell", book_ba, 100);
-            let orderID = calc_order_id(book_ba, 'sell', this.seq_num);
-            mm_orders.push(new OrderState(orderID, 'sell', book_ba, 100));
+            let clientID = this.gen_client_id(book_ba, 'sell');
+            let ask_placed = await this.placeOrder(clientID, "sell", book_ba, 100);
+            mm_orders.push(new OrderState(clientID, 'sell', book_ba, 100));
             this.seq_num++;
         }
         this.ask_pos = book_ba;
@@ -202,14 +204,6 @@ export class SimpleMarketMaker implements MarketMaker {
         let updated_bids = false;
         let updated_asks = false;
 
-        console.log("bb check: ", best_bid);
-        console.log("ba check: ", best_ask);
-        console.log("bp check: ", this.bid_pos);
-        console.log("ap check: ", this.ask_pos);
-
-        console.log(best_bid > this.bid_pos);
-        console.log(best_ask < this.ask_pos);
-
         let new_order_state: OrderState[] = [];
 
         // there's a more favorable bid in the market
@@ -217,17 +211,16 @@ export class SimpleMarketMaker implements MarketMaker {
             //cancel all existing bids & re-place bid at better price
             for(let order of mm_orders) {
                 if(order.side == 'buy') {
-                    await this.cancelOrder(order.orderID, order.side);
-                } else new_order_state.push(order);
+                    await this.cancelOrder(order.clientID, order.side);
+                } else if (best_ask >= this.ask_pos) new_order_state.push(order);
             }
 
             //place the new bid & reflect that in the intended market state
-            await this.update_seq_num();
-            await this.placeOrder('buy', best_bid, 100);
+            let clientID = this.gen_client_id(best_bid, 'buy');
+            await this.placeOrder(clientID, 'buy', best_bid, 100);
             
-            let orderID = calc_order_id(best_bid, 'buy', this.seq_num);
-            new_order_state.push(new OrderState(orderID, 'buy', best_bid, 100));
-            // console.log("pushing to nos bid");
+            new_order_state.push(new OrderState(clientID, 'buy', best_bid, 100));
+            this.seq_num++;
             this.bid_pos = best_bid;
             updated_bids = true;
         }
@@ -236,54 +229,67 @@ export class SimpleMarketMaker implements MarketMaker {
             //cancel all existing asks & re-place ask at better price
             for(let order of mm_orders) {
                 if(order.side == 'sell') {
-                    await this.cancelOrder(order.orderID, order.side);
-                } else new_order_state.push(order);
+                    await this.cancelOrder(order.clientID, order.side);
+                } else if (best_bid <= this.bid_pos) new_order_state.push(order);
             }
-            await this.update_seq_num();
-            await this.placeOrder('sell', best_ask, 100);
-            let orderID = calc_order_id(best_ask, 'sell', this.seq_num);
-            new_order_state.push(new OrderState(orderID, 'sell', best_ask, 100));
-            // console.log("pushing to nos ask");
+            let clientID = this.gen_client_id(best_ask, 'sell');
+            await this.placeOrder(clientID, 'sell', best_ask, 100);
+            new_order_state.push(new OrderState(clientID, 'sell', best_ask, 100));
+            this.seq_num++;
             this.ask_pos = best_ask;
             updated_asks = true;
         }
 
-        // console.log(new_order_state);
+        if(updated_asks && updated_bids) return new_order_state;
 
-        if(!updated_bids && !updated_asks) new_order_state = mm_orders;
+        // Check for fills & if we need to place partial orders
+        let mm_ask_size = 0;
+        let mm_bid_size = 0;
+        let cur_bid = this.bid_pos;
+        let cur_ask = this.ask_pos;
 
-        // console.log("nos: ");   
-        // for(let order of new_order_state) {
-        //     console.log(order.orderID, order.price, order.size);
-        // }
-        // console.log("end nos");
+        for (let order of mm_orders) {
+            if(order.side == 'buy') { 
+                mm_bid_size += order.size; cur_bid = order.price;
+            }
+            if(order.side == 'sell'){ 
+                mm_ask_size += order.size; cur_ask = order.price;
+            }
+        }
+
+        let fill_flag = false;
+
+        // fill & we haven't cancelled all bids above
+        if(mm_bid_size < ORDER_SIZE && !updated_bids) {
+            let clientID = this.gen_client_id(cur_bid, 'buy');
+            let up_bid = await(this.placeOrder(clientID, 'buy', cur_bid, ORDER_SIZE - mm_bid_size));
+            new_order_state.push(new OrderState(clientID, 'buy', cur_bid, ORDER_SIZE - mm_bid_size));
+            this.bid_pos = cur_bid;
+            fill_flag = true;
+        }
+
+        // fill & we haven't cancelled all asks above
+        if(mm_ask_size < ORDER_SIZE && !updated_asks) {
+            let clientID = this.gen_client_id(cur_ask, 'sell');
+            let up_ask = await this.placeOrder(clientID, 'sell', cur_ask, ORDER_SIZE - mm_ask_size);
+            new_order_state.push(new OrderState(clientID, 'sell', cur_ask, ORDER_SIZE - mm_ask_size));
+            this.ask_pos = cur_ask;
+            fill_flag = true;
+        }
+
+        if(fill_flag) {
+            for(let order of mm_orders) {
+                new_order_state.push(order)
+            }
+        }
+
+        if(!(mm_bid_size < ORDER_SIZE && !updated_bids) && !(mm_ask_size < ORDER_SIZE && !updated_asks) && !(updated_bids || updated_asks)) {
+            return mm_orders;
+        }
 
         return new_order_state;
 
-    //     // Check for fills & if we need to place partial orders
-    //     let mm_ask_size = 0;
-    //     let mm_bid_size = 0;
-    //     let cur_bid = this.bid_pos;
-    //     let cur_ask = this.ask_pos;
 
-    //     for (let order of mm_orders) {
-    //         if(order.side == 'buy') { mm_bid_size += order.size; cur_bid = order.price; }
-    //         if(order.side == 'sell'){ mm_ask_size += order.size; cur_ask = order.price; }
-    //     }
-
-    //     // fill & we haven't cancelled all bids above
-    //     cur_bid = (updated_bids) ? best_bid : cur_bid;
-    //     if(mm_bid_size < ORDER_SIZE && this.init_ct >= 2) {
-    //         let up_bid = await(this.placeOrder('buy', cur_bid, ORDER_SIZE - mm_bid_size));
-    //         this.bid_pos = cur_bid;
-    //     }
-
-    //     // fill & we haven't cancelled all asks above
-    //     cur_ask = (updated_asks) ? best_ask : cur_ask;
-    //     if(mm_ask_size < ORDER_SIZE && this.init_ct >= 2) {
-    //         let up_ask = await this.placeOrder('sell', cur_ask, ORDER_SIZE - mm_ask_size);
-    //         this.ask_pos = cur_ask;
-    //     }
 
     //     await this.settle();
     //     this.init_ct ++;
@@ -313,9 +319,17 @@ export class SimpleMarketMaker implements MarketMaker {
         }
     }
 
-    async update_seq_num() {
-        let req_q_data = throwIfNull( await this.connection.getAccountInfo(this.request_q));
-        this.seq_num = REQUEST_QUEUE_HEADER.decode(req_q_data.data).nextSeqNum;
+    async update_seq_num(sqbuf : Buffer) {
+        this.seq_num = REQUEST_QUEUE_HEADER.decode(sqbuf).nextSeqNum;
+    }
+
+    gen_client_id(price : number, side: 'buy' | 'sell') {
+        let upper = new BN(price);
+        upper.iushln(32);
+        let lower = new BN(this.seq_num);
+        if(side == 'buy') lower.inotn(32);
+        this.seq_num++;
+        return upper.uor(lower);
     }
 }
 
@@ -346,23 +360,4 @@ function getMarketKeys(market_config : string) : [Connection, PublicKey, PublicK
 
 
     return [connection, marketAddress, programAddress, request_queue, open_orders, bids, asks, event_q, participant, payer_quote, payer_base];
-}
-
-function printside(side : Orderbook) {
-    for (let order of side) {
-        console.log(
-          order.orderId,
-          order.price,
-          order.size,
-          order.side, // 'buy' or 'sell'
-        );
-      }    
-}
-
-function calc_order_id(price : number, side: 'buy' | 'sell', seqnum : number) {
-    let upper = new BN(price);
-    upper.iushln(64);
-    let lower = new BN(seqnum);
-    if(side == 'buy') lower.inotn(64);
-    return upper.uor(lower);
 }

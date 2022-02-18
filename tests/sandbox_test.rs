@@ -135,11 +135,13 @@ mod tests {
         fs::write("mm_keys.txt", data).expect("Unable to write file");
 
         let engine_data = format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}",
             sandbox.url(),
             market.bids().pubkey(),
             market.asks().pubkey(),
             market.event_queue().pubkey(),
+            market.request_queue().pubkey(),
+            mm.open_orders().pubkey(),
         );
 
         fs::write("engine_keys.txt", engine_data).expect("Unable to write file");

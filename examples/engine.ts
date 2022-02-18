@@ -1,23 +1,24 @@
-import { Orderbook } from "@project-serum/serum";
+import { decodeEventQueue, Orderbook } from "@project-serum/serum";
 import { Order } from "@project-serum/serum/lib/market";
 import { Connection, PublicKey, AccountInfo } from "@solana/web3.js";
 import BN from "bn.js";
 import * as fs from 'fs';
 import { MarketMaker } from "./mm_ws";
+import { _OPEN_ORDERS_LAYOUT_V2 } from "@project-serum/serum/lib/market";
+import {Mutex} from 'async-mutex';
 
 export class OrderState {
-    orderID : BN;
+    clientID : BN;
     side    : 'buy' | 'sell';
     price   : number;
     size    : number;
 
     constructor(orderID: BN, side: 'buy' | 'sell', price: number, size: number) {
-        this.orderID = orderID;
+        this.clientID = orderID;
         this.side = side;
         this.price = price;
         this.size = size;
     }
-
 }
 
 export class Engine {
@@ -25,18 +26,22 @@ export class Engine {
     market_bids  : PublicKey;
     market_asks  : PublicKey;
     market_eq    : PublicKey;
+    market_rq    : PublicKey;
+    mm_oo        : PublicKey;
     init_pos     : boolean;
     tx_inflight  : boolean;
     mm           : MarketMaker;
     bid_state    : OrderState[];
     ask_state    : OrderState[];
     mm_state     : OrderState[];
+    num_fills    : number;
 
     constructor(mm : MarketMaker) {
 
         this.mm = mm;
         this.init_pos = false;
-        [this.connection, this.market_bids, this.market_asks, this.market_eq] = getEngineKeys();
+        this.num_fills = 0;
+        [this.connection, this.market_bids, this.market_asks, this.market_eq, this.market_rq, this.mm_oo] = getEngineKeys();
     }
 
     async run() {
@@ -47,72 +52,78 @@ export class Engine {
             this.tx_inflight = true;
         }
 
-        this.connection.onAccountChange(this.market_bids, async (accountinfo : AccountInfo<Buffer>) => {
-            console.log("\n")
-            console.log("callback");
-            let bids = Orderbook.decode(this.mm.market, accountinfo.data);
-            let asks = Orderbook.decode(this.mm.market, throwIfNull( await this.connection.getAccountInfo(this.market_asks) ).data);
-            this.update_bids(bids);
-            this.update_asks(asks);
+        const mutex = new Mutex();
 
+        this.connection.onAccountChange(this.market_bids, async (accountinfo : AccountInfo<Buffer>) => {
+            let bids = Orderbook.decode(this.mm.market, accountinfo.data);
+            this.update_bids(bids);
+            this.refresh_mm(this.bid_state, this.ask_state);
+
+            await mutex.acquire();
+            if(this.diff_orderbook()) {
+                this.tx_inflight = false;
+            }
+            if(this.tx_inflight == false) {
+                this.tx_inflight = true;
+                this.mm_state = await this.mm.onBook(this.bid_state, this.ask_state, this.mm_state);
+            }
+
+            mutex.release();
+
+        });
+
+        this.connection.onAccountChange(this.market_asks, async (accountinfo : AccountInfo<Buffer>) => {
+            let asks = Orderbook.decode(this.mm.market, accountinfo.data);
+            this.update_asks(asks);
+            this.refresh_mm(this.bid_state, this.ask_state);
+
+
+            await mutex.acquire();
             if(this.diff_orderbook()) {
                 this.tx_inflight = false;
             }
 
             if(this.tx_inflight == false) {
-                console.log("bookupdate happens");
-                this.mm_state = await this.mm.onBook(this.bid_state, this.ask_state, this.mm_state);
                 this.tx_inflight = true;
+                this.mm_state = await this.mm.onBook(this.bid_state, this.ask_state, this.mm_state);
             }
 
+            mutex.release();
 
-            
-
-            // console.log("\n");
-            
-
-            // console.log(this.diff_orderbook());
-
-            
         });
+    }
 
-        // let asks_before = throwIfNull( await this.connection.getAccountInfo(this.random) );
-   
-        // this.connection.onAccountChange(this.random, async (accountinfo : AccountInfo<Buffer>) => {
-        //     printbuf(asks_before.data);
-        //     console.log("\n");
-        //     printbuf(accountinfo.data);
-        //     console.log(Buffer.compare(asks_before.data, accountinfo.data));
-
-        //     console.log("lbefore: ", asks_before.lamports);
-        //     console.log("lafter: ", accountinfo.lamports);
-        // });
-        // this.connection.onAccountChange(this.market_eq, async (accountinfo : AccountInfo<Buffer>) => {await this.mm.onFill()});
+    refresh_mm(bids : OrderState[], asks : OrderState[]) {
+        for (let i in this.mm_state) {
+            for(let bid of bids) {
+                if(this.mm_state[i].clientID.eq(bid.clientID)) { this.mm_state[i].price = bid.price; this.mm_state[i].size = bid.size; }
+            }
+            for(let bid of asks) {
+                if(this.mm_state[i].clientID.eq(bid.clientID)) { this.mm_state[i].price = bid.price; this.mm_state[i].size = bid.size; }
+            }
+        }
     }
 
     update_bids(book : Orderbook) {
         this.bid_state = [];
         for(let order of book) {
-            this.bid_state.push(new OrderState(order.orderId, order.side, order.price, order.size));
+            this.bid_state.push(new OrderState((order.clientId == undefined || order.clientId.isZero()) ? order.orderId : order.clientId, order.side, order.price, order.size));
         }
     }
 
     update_asks(book : Orderbook) {
         this.ask_state = [];
         for(let order of book) {
-            this.ask_state.push(new OrderState(order.orderId, order.side, order.price, order.size));
+            this.ask_state.push(new OrderState((order.clientId == undefined || order.clientId.isZero()) ? order.orderId : order.clientId, order.side, order.price, order.size));
         }
     }
 
     diff_orderbook() {
-        console.log("difforderbook")
-        this.printstates();
-
         for(let order of this.mm_state) {
             let found = false;
             if(order.side == 'buy') {
                 for(let bid of this.bid_state){
-                    if(order.orderID.eq(bid.orderID) && order.price == bid.price && order.size == bid.size) {
+                    if(order.clientID.eq(bid.clientID) && order.price == bid.price && order.size == bid.size) {
                         found = true;
                         break;
                     }
@@ -121,7 +132,7 @@ export class Engine {
             }
             if(order.side == 'sell') {
                 for(let ask of this.ask_state){
-                    if(order.orderID.eq(ask.orderID) && order.price == ask.price && order.size == ask.size) {
+                    if(order.clientID.eq(ask.clientID) && order.price == ask.price && order.size == ask.size) {
                         found = true;
                         break;
                     }
@@ -132,41 +143,9 @@ export class Engine {
         }
         return true;
     }
-
-    printstates() {
-        console.log("bids: ")
-        for(let bid of this.bid_state) {
-            console.log(bid.orderID, bid.price, bid.side, bid.size);
-        }
-        console.log("asks: ")
-
-        for(let bid of this.ask_state) {
-            console.log(bid.orderID, bid.price, bid.side, bid.size);
-        }
-
-        console.log("mm: ")
-
-        for(let bid of this.mm_state) {
-            console.log(bid.orderID, bid.price, bid.side, bid.size);
-        }
-    }
 }
 
-function printside(side : Orderbook) {
-    for (let order of side) {
-        console.log(
-          order.orderId,
-          order.price,
-          order.size,
-          order.side, // 'buy' or 'sell'
-          order.openOrdersSlot,
-        );
-      }    
-}
-
-
-
-function getEngineKeys(): [Connection, PublicKey, PublicKey, PublicKey] {
+function getEngineKeys(): [Connection, PublicKey, PublicKey, PublicKey, PublicKey, PublicKey] {
     let text = fs.readFileSync(__dirname + "/../engine_keys.txt",'utf8');
     let tbl = text.split("\n");
 
@@ -174,9 +153,11 @@ function getEngineKeys(): [Connection, PublicKey, PublicKey, PublicKey] {
     let market_bids = new PublicKey(tbl[1]);
     let market_asks = new PublicKey(tbl[2]);
     let market_eq = new PublicKey(tbl[3]);
+    let market_rq = new PublicKey(tbl[4]);
+    let mm_oo = new PublicKey(tbl[5]);
 
 
-    return [connection, market_bids, market_asks, market_eq];
+    return [connection, market_bids, market_asks, market_eq, market_rq, mm_oo];
 }
 
 export function throwIfNull<T>(value: T | null, message = 'account not found'): T {
@@ -192,11 +173,3 @@ export function throwIfUndefined<T>(value: T | undefined, message = 'account not
     }
     return value;
   }
-
-function printbuf(buff : Buffer) {
-    var str = '';
-    for (var ii = 0; ii < buff.length; ii++) {
-        str += buff[ii].toString(16) + ' ' ;
-    };
-    console.log(str);
-}
