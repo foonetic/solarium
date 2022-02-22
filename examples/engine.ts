@@ -6,6 +6,10 @@ import { MarketMaker, EVENT_QUEUE_HEADER } from "./mm_ws";
 import {Mutex} from 'async-mutex';
 import { decodeEventsSince } from "@project-serum/serum/lib/queue";
 
+const MIN_BID = 1;
+const MIN_ASK = 10000;
+const ORDER_SIZE = 100;
+
 export class OrderState {
     clientID : BN;
     side    : 'buy' | 'sell';
@@ -24,12 +28,15 @@ export class Engine {
     connection   : Connection;
     market_bids  : PublicKey;
     market_asks  : PublicKey;
+    best_bid     : number;
+    best_ask     : number;
     market_eq    : PublicKey;
     init_pos     : boolean;
     mm           : MarketMaker;
     bid_state    : OrderState[];
     ask_state    : OrderState[];
-    mm_state     : OrderState[];
+    mm_bids      : OrderState[];
+    mm_asks      : OrderState[];
     eq_seq_num   : number;
 
     constructor(mm : MarketMaker) {
@@ -42,7 +49,7 @@ export class Engine {
     async run() {
 
         if(this.init_pos == false) {
-            [[this.bid_state, this.ask_state, this.mm_state], this.eq_seq_num] = await this.mm.initialize_positions();
+            [this.best_bid, this.best_ask, this.mm_bids, this.mm_asks, this.eq_seq_num] = await this.mm.initialize_positions();
             this.init_pos = true;
         }
 
@@ -53,9 +60,11 @@ export class Engine {
             await mutex.acquire();
 
             let bids = Orderbook.decode(this.mm.market, accountinfo.data);
-            let bid_callback = this.update_bids(bids);
+            let top_bid = bids.items(true).next();
+
+            this.best_bid = (top_bid.value == null)? MIN_BID : top_bid.value.price;
       
-            [this.bid_state, this.ask_state, this.mm_state] = await this.mm.onBook(bid_callback, this.ask_state, this.mm_state);
+            [this.best_bid, this.best_ask, this.mm_bids, this.mm_asks] = await this.mm.onBook(this.best_bid, this.best_ask, this.mm_bids, this.mm_asks);
 
             mutex.release();
 
@@ -66,9 +75,11 @@ export class Engine {
             await mutex.acquire();
 
             let asks = Orderbook.decode(this.mm.market, accountinfo.data);
-            let ask_callback = this.update_asks(asks);
+            let top_ask = asks.items().next();
 
-            [this.bid_state, this.ask_state, this.mm_state] = await this.mm.onBook(this.bid_state, ask_callback, this.mm_state);
+            this.best_ask = (top_ask.value == null)? MIN_ASK : top_ask.value.price;
+      
+            [this.best_bid, this.best_ask, this.mm_bids, this.mm_asks] = await this.mm.onBook(this.best_bid, this.best_ask, this.mm_bids, this.mm_asks);
 
             mutex.release();
 
@@ -79,9 +90,9 @@ export class Engine {
             await mutex.acquire();
             let eq: any[] = decodeEventsSince(accountinfo.data, this.eq_seq_num).filter((event) => event.eventFlags.fill);
             this.eq_seq_num = EVENT_QUEUE_HEADER.decode(accountinfo.data).seqNum;
-            this.refresh_mm(eq);
+            let [bid_refill, ask_refill] = this.refresh_mm(eq);
 
-            if(eq.length != 0) [this.bid_state, this.ask_state, this.mm_state] = await this.mm.onFill(this.bid_state, this.ask_state, this.mm_state);
+            if(eq.length != 0) [this.mm_bids, this.mm_asks] = await this.mm.onFill(bid_refill, ask_refill, this.mm_bids, this.mm_asks);
 
             mutex.release();
 
@@ -89,19 +100,36 @@ export class Engine {
     }
 
     refresh_mm(events : any[]) {
+        let bid_qty_refill = 0;
+        let ask_qty_refill = 0;
        for (let event of events) {
-           for(let i = 0; i < this.mm_state.length;) {
-               if(this.mm_state[i].clientID.eq(event.clientOrderId)) {
-                   this.mm_state[i].size -= event.nativeQuantityReleased;
-               }
-               if(this.mm_state[i].size == 0) {
-                   this.mm_state.splice(i, 1);
-                   continue;
-               }
-               i++;
+           for(let i = 0; i < this.mm_bids.length;) {
+                if(this.mm_bids[i].clientID.eq(event.clientOrderId)){
+                    bid_qty_refill += event.nativeQuantityReleased;
+                    this.mm_bids[i].size -= event.nativeQuantityReleased;
+                }
+                if(this.mm_bids[i].size == 0) {
+                    this.mm_bids.splice(i, 1);
+                    continue;
+                }
+                i++;
            }
+
+            for(let i = 0; i < this.mm_asks.length;) {
+                 if(this.mm_asks[i].clientID.eq(event.clientOrderId)){
+                    ask_qty_refill += event.nativeQuantityReleased;
+                     this.mm_asks[i].size -= event.nativeQuantityReleased;
+                 }
+                 if(this.mm_asks[i].size == 0) {
+                     this.mm_asks.splice(i, 1);
+                     continue;
+                 }
+                 i++;
+            }
        }
+       return [bid_qty_refill, ask_qty_refill]
     }
+
 
     update_bids(book : Orderbook) : OrderState[] {
         let bid: OrderState[] = [];
