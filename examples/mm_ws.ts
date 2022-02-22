@@ -57,8 +57,7 @@ export class SimpleMarketMaker implements MarketMaker {
         this.seq_num = 10;
     }
 
-    async placeOrder(clientID: BN, side : string, price : number, qty : number) {
-        if(side != "buy" && side != "sell") throw new TypeError("Invalid Side");
+    async placeOrder(clientID: BN, side : 'buy' | 'sell', price : number, qty : number) {
 
         let market = this.market;
         
@@ -93,7 +92,7 @@ export class SimpleMarketMaker implements MarketMaker {
         }  
     }
 
-    async cancelOrder(orderId : BN, side: 'buy' | 'sell') {
+    async cancelOrder(orderId : BN) {
         let instr = DexInstructions.cancelOrderByClientIdV2({
             market: this.market_addr,
             bids: this.market_bids,
@@ -191,7 +190,7 @@ export class SimpleMarketMaker implements MarketMaker {
             for (let i = 0; i < mm_bids.length; i++) {
                 let order = mm_bids[i];
                 console.log("Cancelling " + order.size + "@" + order.price + " bid");
-                await this.cancelOrder(order.clientID, order.side);
+                await this.cancelOrder(order.clientID);
             }
 
             mm_bids = [];
@@ -207,7 +206,7 @@ export class SimpleMarketMaker implements MarketMaker {
             for (let i = 0; i < mm_asks.length; i++) {
                 let order = mm_asks[i];
                 console.log("Cancelling " + order.size + "@" + order.price + " ask");
-                await this.cancelOrder(order.clientID, order.side);
+                await this.cancelOrder(order.clientID);
             }
 
             mm_asks = [];
