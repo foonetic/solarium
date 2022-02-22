@@ -17,11 +17,12 @@ Example usage:
 
 ```
 // Start Solarium's MM test (Init market & participants)
-cargo test -- --nocapture mm_bot
+./run --nocapture
 
 // Wait for "Made Market" log, then start the MM
 cd examples/
-ts-node mm.ts
+ts-node main.ts // websocket implementation
+ts-node mm.ts // polling implementation
 
 // Simulating other orders:
 ts-node participant.ts ('buy' | 'sell' ) qty@price
