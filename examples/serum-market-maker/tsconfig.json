@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "lib": ["es6"],
+    "alwaysStrict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "esModuleInterop": true,
+    "downlevelIteration": true,
+    "moduleResolution": "node"
+  },
+  "files": ["src/index.ts"]
+}

@@ -5,3 +5,4 @@ crank_log.txt
 serum_dex.so
 
 .DS_Store
+node_modules
