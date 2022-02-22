@@ -129,24 +129,6 @@ export class Engine {
        }
        return [bid_qty_refill, ask_qty_refill]
     }
-
-
-    update_bids(book : Orderbook) : OrderState[] {
-        let bid: OrderState[] = [];
-        for(let order of book) {
-            bid.push(new OrderState((order.clientId == undefined || order.clientId.isZero()) ? order.orderId : order.clientId, order.side, order.price, order.size));
-        }
-        return bid;
-    }
-
-    update_asks(book : Orderbook): OrderState [] {
-        let ask: OrderState[] = [];
-        for(let order of book) {
-            ask.push(new OrderState((order.clientId == undefined || order.clientId.isZero()) ? order.orderId : order.clientId, order.side, order.price, order.size));
-        }
-        ask.reverse();
-        return ask;
-    }
 }
 
 function getEngineKeys(): [Connection, PublicKey, PublicKey, PublicKey] {
