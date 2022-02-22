@@ -1,20 +1,5 @@
 # Solarium examples
 
-MM Bot on Solarium
-
-Before using:
-
-(npm)
-```
-npm install @solana/web3.js @project-serum/serum
-```
-(yarn)
-```
-yarn add @solana/web3.js @project-serum/serum
-```
-
-Example usage:
-
 ```
 // Start Solarium's MM test (Init market & participants)
 ./run --nocapture
