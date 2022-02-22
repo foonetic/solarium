@@ -122,7 +122,7 @@ export class Engine {
 }
 
 function getEngineKeys(): [Connection, PublicKey, PublicKey, PublicKey] {
-    let text = fs.readFileSync(__dirname + "/../engine_keys.txt",'utf8');
+    let text = fs.readFileSync(__dirname + "/engine_keys.txt",'utf8');
     let tbl = text.split("\n");
 
     let connection = new Connection(tbl[0]);

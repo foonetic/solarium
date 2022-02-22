@@ -2,7 +2,7 @@ import { Account, Connection, PublicKey } from '@solana/web3.js';
 import { Market, MARKETS } from '@project-serum/serum';
 import * as fs from 'fs';
 
-let text = fs.readFileSync('../mm_keys.txt','utf8');
+let text = fs.readFileSync(__dirname + '/mm_keys.txt','utf8');
 let tbl = text.split("\n");
 
 let connection = new Connection(tbl[0])

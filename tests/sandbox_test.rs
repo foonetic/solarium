@@ -46,27 +46,20 @@ mod tests {
         pub serum_tail_padding: [u8; 7],
     }
 
-
     #[test]
-    fn mm_bot() {
+    fn integration() {
         let sandbox = Sandbox::new().unwrap();
         println!("sandbox url: {}", sandbox.url());
         let market_creator = Actor::new(&sandbox).unwrap();
-        market_creator.airdrop(10000 * LAMPORTS_PER_SOL).unwrap();
+        market_creator.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
         let base_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
         let quote_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
-
-        // let serum_program = market_creator
-        //     .deploy_local(&std::path::Path::new(
-        //         "/home/rprasadintern/work/serum-dex/dex/target/deploy/serum_dex.so",
-        //     ))
-        //     .unwrap();
         let serum_program = market_creator
-        .deploy_remote(
-            "https://github.com/foonetic/solarium-deps/raw/main/serum_dex.so",
-            "serum_dex.so",
-        )
-        .unwrap();
+            .deploy_remote(
+                "https://github.com/foonetic/solarium-deps/raw/main/serum_dex.so",
+                "serum_dex.so",
+            )
+            .unwrap();
 
         let market = solarium::serum::Market::new(
             &sandbox,
@@ -83,210 +76,93 @@ mod tests {
             256,
         )
         .unwrap();
+        println!("Made market.");
 
         let maker = Participant::new(
             &sandbox,
             &market_creator,
             &market,
-            10000 * LAMPORTS_PER_SOL,
-            100000,
-            100000,
+            10 * LAMPORTS_PER_SOL,
+            1000,
+            2000,
         )
         .unwrap();
-
-        // let random = Participant::new(
-        //     &sandbox,
-        //     &market_creator,
-        //     &market,
-        //     10000 * LAMPORTS_PER_SOL,
-        //     100000,
-        //     100000,
-        // )
-        // .unwrap();
-
-        let mm = Participant::new(
+        let taker = Participant::new(
             &sandbox,
             &market_creator,
             &market,
-            10000 * LAMPORTS_PER_SOL,
-            1000000000000,
-            1000000000000,
+            10 * LAMPORTS_PER_SOL,
+            1000,
+            2000,
         )
         .unwrap();
 
-        let data = format!(
-            "{}\n{}\n{}\n{:?}\n{}\n{}\n{:?}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
-            sandbox.url(),
-            market.market().pubkey().to_string(),
-            serum_program.pubkey().to_string(),
-            mm.account().keypair().to_bytes(),
-            mm.quote().pubkey(),
-            mm.base().pubkey(),
-            maker.account().keypair().to_bytes(),
-            maker.quote().pubkey(),
-            maker.base().pubkey(),
-            market.request_queue().pubkey().to_string(),
-            mm.open_orders().pubkey().to_string(),
-            market.bids().pubkey(),
-            market.asks().pubkey(),
-            market.event_queue().pubkey(),
+        // Place ask order
+        let _taker_order = market
+            .new_order(
+                &taker.quote(),
+                &taker,
+                Side::Bid,
+                NonZeroU64::new(20).unwrap(),
+                OrderType::Limit,
+                NonZeroU64::new(500).unwrap(),
+                1,
+                SelfTradeBehavior::DecrementTake,
+                1,
+                NonZeroU64::new(300).unwrap(),
+                None,
+            )
+            .unwrap();
+        println!("Placed bid order.");
+
+        let _maker_order = market
+            .new_order(
+                &maker.base(),
+                &maker,
+                Side::Ask,
+                NonZeroU64::new(20).unwrap(),
+                OrderType::Limit,
+                NonZeroU64::new(400).unwrap(),
+                1,
+                SelfTradeBehavior::DecrementTake,
+                1,
+                NonZeroU64::new(500).unwrap(),
+                None,
+            )
+            .unwrap();
+
+        println!("Placed ask order.");
+
+        let maker_oo_info = sandbox
+            .client()
+            .get_account(maker.open_orders().pubkey())
+            .unwrap();
+        let maker_oo_data: OpenOrders =
+            OpenOrders::try_from_slice(&maker_oo_info.data.borrow()).unwrap();
+        let maker_order_id: u128 = maker_oo_data.orders[0];
+
+        market.cancel_order(&market_creator, &maker, Side::Ask, maker_order_id);
+
+        market.consume_events(
+            &market_creator,
+            vec![maker.open_orders().pubkey(), taker.open_orders().pubkey()],
+            10,
         );
 
-        fs::write("mm_keys.txt", data).expect("Unable to write file");
+        market.settle_funds(&market_creator, &taker);
+        market.settle_funds(&market_creator, &maker);
 
-        let engine_data = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
-            sandbox.url(),
-            market.bids().pubkey(),
-            market.asks().pubkey(),
-            market.event_queue().pubkey(),
-            market.request_queue().pubkey(),
-            mm.open_orders().pubkey(),
-        );
+        let end_maker_b = get_pubkey_balance(maker.base().pubkey(), &sandbox);
+        let end_taker_b = get_pubkey_balance(taker.base().pubkey(), &sandbox);
 
-        fs::write("engine_keys.txt", engine_data).expect("Unable to write file");
+        let end_maker_q = get_pubkey_balance(maker.quote().pubkey(), &sandbox);
+        let end_taker_q = get_pubkey_balance(taker.quote().pubkey(), &sandbox);
 
-        println!("Made market.");
-
-        sleep(Duration::from_millis(20000));
-
-    //     let _taker_order = market
-    //     .new_order(
-    //         &maker.quote(),
-    //         &maker,
-    //         Side::Bid,
-    //         NonZeroU64::new(20).unwrap(),
-    //         OrderType::Limit,
-    //         NonZeroU64::new(500).unwrap(),
-    //         1,
-    //         SelfTradeBehavior::DecrementTake,
-    //         1,
-    //         NonZeroU64::new(300).unwrap(),
-    //         None,
-    //         random.account().pubkey(),
-    //     ).unwrap();
-    // println!("Placed bid order.");
-
-        while(true) {}
+        assert_eq!(end_maker_b, "985");
+        assert_eq!(end_taker_b, "1015");
+        assert_eq!(end_maker_q, "2299");
+        assert_eq!(end_taker_q, "1700");
     }
-
-    // #[test]
-    // fn integration() {
-    //     let sandbox = Sandbox::new().unwrap();
-    //     println!("sandbox url: {}", sandbox.url());
-    //     let market_creator = Actor::new(&sandbox).unwrap();
-    //     market_creator.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
-    //     let base_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
-    //     let quote_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
-    //     let serum_program = market_creator
-    //         .deploy_remote(
-    //             "https://github.com/foonetic/solarium-deps/raw/main/serum_dex.so",
-    //             "serum_dex.so",
-    //         )
-    //         .unwrap();
-
-    //     let market = solarium::serum::Market::new(
-    //         &sandbox,
-    //         &market_creator,
-    //         serum_program.pubkey(),
-    //         &base_mint,
-    //         &quote_mint,
-    //         None,
-    //         1,
-    //         1,
-    //         100,
-    //         128,
-    //         128,
-    //         256,
-    //     )
-    //     .unwrap();
-    //     println!("Made market.");
-
-    //     let maker = Participant::new(
-    //         &sandbox,
-    //         &market_creator,
-    //         &market,
-    //         10 * LAMPORTS_PER_SOL,
-    //         1000,
-    //         2000,
-    //     )
-    //     .unwrap();
-    //     let taker = Participant::new(
-    //         &sandbox,
-    //         &market_creator,
-    //         &market,
-    //         10 * LAMPORTS_PER_SOL,
-    //         1000,
-    //         2000,
-    //     )
-    //     .unwrap();
-
-    //     // Place ask order
-    //     let _taker_order = market
-    //         .new_order(
-    //             &taker.quote(),
-    //             &taker,
-    //             Side::Bid,
-    //             NonZeroU64::new(20).unwrap(),
-    //             OrderType::Limit,
-    //             NonZeroU64::new(500).unwrap(),
-    //             1,
-    //             SelfTradeBehavior::DecrementTake,
-    //             1,
-    //             NonZeroU64::new(300).unwrap(),
-    //             None,
-    //         )
-    //         .unwrap();
-    //     println!("Placed bid order.");
-
-    //     let _maker_order = market
-    //         .new_order(
-    //             &maker.base(),
-    //             &maker,
-    //             Side::Ask,
-    //             NonZeroU64::new(20).unwrap(),
-    //             OrderType::Limit,
-    //             NonZeroU64::new(400).unwrap(),
-    //             1,
-    //             SelfTradeBehavior::DecrementTake,
-    //             1,
-    //             NonZeroU64::new(500).unwrap(),
-    //             None,
-    //         )
-    //         .unwrap();
-
-    //     println!("Placed ask order.");
-
-    //     let maker_oo_info = sandbox
-    //         .client()
-    //         .get_account(maker.open_orders().pubkey())
-    //         .unwrap();
-    //     let maker_oo_data: OpenOrders =
-    //         OpenOrders::try_from_slice(&maker_oo_info.data.borrow()).unwrap();
-    //     let maker_order_id: u128 = maker_oo_data.orders[0];
-
-    //     market.cancel_order(&market_creator, &maker, Side::Ask, maker_order_id);
-
-    //     market.consume_events(
-    //         &market_creator,
-    //         vec![maker.open_orders().pubkey(), taker.open_orders().pubkey()],
-    //         10,
-    //     );
-
-    //     market.settle_funds(&market_creator, &taker);
-    //     market.settle_funds(&market_creator, &maker);
-
-    //     let end_maker_b = get_pubkey_balance(maker.base().pubkey(), &sandbox);
-    //     let end_taker_b = get_pubkey_balance(taker.base().pubkey(), &sandbox);
-
-    //     let end_maker_q = get_pubkey_balance(maker.quote().pubkey(), &sandbox);
-    //     let end_taker_q = get_pubkey_balance(taker.quote().pubkey(), &sandbox);
-
-    //     assert_eq!(end_maker_b, "985");
-    //     assert_eq!(end_taker_b, "1015");
-    //     assert_eq!(end_maker_q, "2299");
-    //     assert_eq!(end_taker_q, "1700");
-    // }
 
     fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
         let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
