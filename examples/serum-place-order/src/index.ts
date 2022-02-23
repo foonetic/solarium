@@ -1,53 +1,65 @@
-import { Account, Connection, PublicKey } from "@solana/web3.js";
+import { Account, Keypair, Connection, PublicKey } from "@solana/web3.js";
+import { ArgumentParser } from "argparse";
 import { Market, MARKETS } from "@project-serum/serum";
 import * as fs from "fs";
 import BN from "bn.js";
+import * as bs58 from "bs58";
 
-let text = fs.readFileSync(__dirname + "/mm_keys.txt", "utf8");
-let tbl = text.split("\n");
-let connection = new Connection(tbl[0]);
-let marketAddress = new PublicKey(tbl[1]);
-let programAddress = new PublicKey(tbl[2]);
+const parser = new ArgumentParser();
+parser.add_argument("--market-config", { default: "market.json" });
+parser.add_argument("--participant", { default: 1, type: "int" });
+parser.add_argument("--price", { default: 150.0, type: "float" });
+parser.add_argument("--size", { default: 1, type: "int" });
+parser.add_argument("--side", { default: "settle", type: "str" });
+const args = parser.parse_args();
+const marketConfig = JSON.parse(fs.readFileSync(args.market_config, "utf8"));
+const participant = marketConfig.participants[args.participant];
+const connection = new Connection(marketConfig.url);
+const programId = new PublicKey(marketConfig.program_id);
+const marketAddress = new PublicKey(marketConfig.market);
 
-let arr = tbl[6].replace("[", "").replace("]", "").split(", ");
-let keypairarr = new Uint8Array(arr.length);
-for (var i in keypairarr) {
-  keypairarr[i] = +arr[i];
-}
-let participant = new Account(keypairarr);
-let payer_quote = new PublicKey(tbl[7]);
-let payer_base = new PublicKey(tbl[8]);
+const bids = new PublicKey(marketConfig.bids);
+const asks = new PublicKey(marketConfig.asks);
+const eventQueue = new PublicKey(marketConfig.event_queue);
 
-let side: String = process.argv[2];
-let order = process.argv[3] != null ? process.argv[3].split("@") : "";
+const keypair = Keypair.fromSecretKey(bs58.decode(participant.keypair));
+const openOrders = new PublicKey(participant.orders);
+const base = new PublicKey(participant.base);
+const quote = new PublicKey(participant.quote);
 
 execute(
   connection,
   marketAddress,
-  programAddress,
-  participant,
-  payer_base,
-  payer_quote,
-  +order[1],
-  +order[0],
-  side
+  programId,
+  keypair,
+  base,
+  quote,
+  args.price,
+  args.size,
+  args.side
 );
 
 async function execute(
   connection: Connection,
-  ma: PublicKey,
-  pa: PublicKey,
-  part: Account,
-  payer_base: PublicKey,
-  payer_quote: PublicKey,
+  marketAddress: PublicKey,
+  programId: PublicKey,
+  participant: Keypair,
+  base: PublicKey,
+  quote: PublicKey,
   price: number,
   size: number,
   side: String
 ) {
-  let market = await Market.load(connection, ma, {}, pa);
+  let market = await Market.load(connection, marketAddress, {}, programId);
 
   if (side == "settle") {
-    await settle(market, connection, part, payer_base, payer_quote);
+    await settle(
+      market,
+      connection,
+      new Account(participant.secretKey),
+      base,
+      quote
+    );
     return;
   }
 
@@ -55,8 +67,8 @@ async function execute(
 
   if (side == "buy") {
     await market.placeOrder(connection, {
-      owner: part,
-      payer: payer_quote,
+      owner: new Account(participant.secretKey),
+      payer: quote,
       side: "buy",
       price: price,
       size: size,
@@ -67,8 +79,8 @@ async function execute(
 
   if (side == "sell") {
     await market.placeOrder(connection, {
-      owner: part,
-      payer: payer_base,
+      owner: new Account(participant.secretKey),
+      payer: base,
       side: "sell",
       price: price,
       size: size,
