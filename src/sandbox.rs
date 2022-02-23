@@ -56,7 +56,7 @@ impl Sandbox {
 
         let commitment_level = solana_sdk::commitment_config::CommitmentConfig::confirmed();
         let client = rpc_client::RpcClient::new_with_commitment(
-            String::from("http://localhost:") + &port.to_string(),
+            String::from("http://127.0.0.1:") + &port.to_string(),
             commitment_level,
         );
 
@@ -80,7 +80,7 @@ impl Sandbox {
 
     /// Returns the validator's RPC service url.
     pub fn url(&self) -> String {
-        String::from("http://localhost:") + &self.port.to_string()
+        String::from("http://127.0.0.1:") + &self.port.to_string()
     }
 
     /// Returns an RPC client that is connected to the validator.
