@@ -5,50 +5,39 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import { Market } from "@project-serum/serum";
 import { Mutex } from "async-mutex";
 import BN from "bn.js";
 import { Orderbook } from "@project-serum/serum";
-import { blob, struct, u32 } from "buffer-layout";
-import { accountFlagsLayout, zeros } from "@project-serum/serum/lib/layout";
 import { DexInstructions } from "@project-serum/serum/lib/instructions";
-import { decodeEventsSince } from "@project-serum/serum/lib/queue";
+import {
+  decodeEventsSince,
+  EVENT_QUEUE_LAYOUT,
+} from "@project-serum/serum/lib/queue";
 
-const MIN_BID = 1;
-const MIN_ASK = 10000;
+// Safety parameters: when top of book is missing (this should be an
+// exceptionally rare corner case), place a bid/ask at these prices.
+// Alternatively, we could just skip the order until there is a level to join.
+const MIN_BID_PRICE = 1;
+const MIN_ASK_PRICE = 10000;
+
+// Quantity to keep on each side.
 const ORDER_SIZE = 100;
 
-export const EVENT_QUEUE_HEADER = struct([
-  blob(5),
-
-  accountFlagsLayout("accountFlags"),
-  u32("head"),
-  zeros(4),
-  u32("count"),
-  zeros(4),
-  u32("seqNum"),
-  zeros(4),
-]);
-
-export interface EventQueue {
-  head: number;
-  count: number;
+// The EVENT_QUEUE_LAYOUT.HEADER data can be deserialized to a number of fields.
+// We are interested in the sequence number only to keep track of which events
+// we have already seen.
+export interface EventQueueHeader {
   seqNum: number;
 }
 
-export class OrderState {
-  clientID: BN;
-  side: "buy" | "sell";
+// Represents an order that we placed.
+export interface PlacedOrder {
+  isBuy: boolean;
   price: number;
   size: number;
-
-  constructor(orderID: BN, side: "buy" | "sell", price: number, size: number) {
-    this.clientID = orderID;
-    this.side = side;
-    this.price = price;
-    this.size = size;
-  }
 }
 
 export class SimpleMarketMaker {
@@ -68,9 +57,9 @@ export class SimpleMarketMaker {
   market: Market;
 
   // Order state
-  bidOrders: Map<string, OrderState>;
+  bidOrders: Map<string, PlacedOrder>;
   bidPrice: number | null;
-  askOrders: Map<string, OrderState>;
+  askOrders: Map<string, PlacedOrder>;
   askPrice: number | null;
 
   // Market state
@@ -110,70 +99,67 @@ export class SimpleMarketMaker {
     this.askOrders = new Map();
   }
 
-  async placeOrder(
-    clientID: BN,
-    side: "buy" | "sell",
-    price: number,
-    qty: number
-  ) {
-    let market = this.market;
-
-    if (side == "buy") {
-      return await market.placeOrder(this.connection, {
-        owner: new Account(this.marketMaker.secretKey),
-        payer: this.marketMakerQuoteVault,
-        clientId: clientID,
-        side: "buy",
-        price: price,
-        size: qty,
-        orderType: "limit",
-        feeDiscountPubkey: null,
-      });
-    } else {
-      return await market.placeOrder(this.connection, {
-        owner: new Account(this.marketMaker.secretKey),
-        payer: this.marketMakerBaseVault,
-        clientId: clientID,
-        side: "sell",
-        price: price,
-        size: qty,
-        orderType: "limit",
-        feeDiscountPubkey: null,
-      });
-    }
+  // Generates a unique ID for a new order. The ID will be used later on to cancel outstanding orders.
+  generateClientId(price: number, side: "buy" | "sell"): BN {
+    const upper = new BN(price);
+    upper.iushln(32);
+    const lower = new BN(this.seqNum);
+    if (side == "buy") lower.inotn(32);
+    this.seqNum++;
+    return upper.uor(lower);
   }
 
-  async cancelAll(orders: Map<string, OrderState>) {
+  // Places a buy or sell limit order. Tracks the placed order in internal state.
+  async placeOrder(isBuy: boolean, price: number, qty: number) {
+    const side: "buy" | "sell" = isBuy ? "buy" : "sell";
+    const payer = isBuy
+      ? this.marketMakerQuoteVault
+      : this.marketMakerBaseVault;
+    const clientID = this.generateClientId(price, side);
+    console.log("[placeOrder]", clientID.toString(), side, qty, "@", price);
+    await this.market.placeOrder(this.connection, {
+      owner: new Account(this.marketMaker.secretKey),
+      payer: payer,
+      clientId: clientID,
+      side: side,
+      price: price,
+      size: qty,
+      orderType: "limit",
+      feeDiscountPubkey: null,
+    });
+
+    const orders = isBuy ? this.bidOrders : this.askOrders;
+    orders.set(clientID.toString(), {
+      isBuy,
+      price,
+      size: qty,
+    });
+  }
+
+  // Cancels all orders in the given map.
+  async cancelAll(orders: Map<string, PlacedOrder>) {
     if (orders.size == 0) return;
     const transaction = new Transaction();
-    for (let order of orders.values()) {
-      let instr = DexInstructions.cancelOrderByClientIdV2({
+    for (const [orderID, order] of orders) {
+      const instr = DexInstructions.cancelOrderByClientIdV2({
         market: this.marketAddress,
         bids: this.bids,
         asks: this.asks,
         eventQueue: this.eventQueue,
         openOrders: this.marketMakerOpenOrders,
         owner: this.marketMaker.publicKey,
-        clientId: order.clientID,
+        clientId: new BN(orderID),
         programId: this.market.programId,
       });
-      console.log("Cancelling " + order.size + "@" + order.price);
+      console.log("[cancelAll]", orderID, order.size, "@", order.price);
       transaction.add(instr);
     }
-    this.sendTxn(transaction, [this.marketMaker]);
+    await sendAndConfirmTransaction(this.connection, transaction, [
+      this.marketMaker,
+    ]);
   }
 
-  async sendTxn(txn: Transaction, signers: Array<Keypair>) {
-    try {
-      const signature = await this.connection.sendTransaction(txn, signers, {
-        skipPreflight: true,
-      });
-
-      await this.connection.confirmTransaction(signature);
-      return signature;
-    } catch {}
-  }
-
+  // Initializes the market maker state.
   async initialize() {
     this.market = await Market.load(
       this.connection,
@@ -181,24 +167,25 @@ export class SimpleMarketMaker {
       {},
       this.programId
     );
-    let bids = await this.market.loadBids(this.connection);
-    let asks = await this.market.loadAsks(this.connection);
-    let eq = await this.connection.getAccountInfo(this.eventQueue);
-    let decodedEventQueue = EVENT_QUEUE_HEADER.decode(
+    const bids = await this.market.loadBids(this.connection);
+    const asks = await this.market.loadAsks(this.connection);
+    const eq = await this.connection.getAccountInfo(this.eventQueue);
+    const decodedEventQueue = EVENT_QUEUE_LAYOUT.HEADER.decode(
       throwIfNull(eq).data
-    ) as EventQueue;
+    ) as EventQueueHeader;
     this.eventQueueSequenceNumber = decodedEventQueue.seqNum;
 
     this.bestAsk = null;
     this.bestBid = null;
 
-    for (let bid of bids) {
+    for (const bid of bids) {
       if (bid.openOrdersAddress.equals(this.marketMakerOpenOrders)) {
-        let id = throwIfUndefined(bid.clientId);
-        this.bidOrders.set(
-          id.toString(),
-          new OrderState(id, bid.side, bid.price, bid.size)
-        );
+        const id = throwIfUndefined(bid.clientId);
+        this.bidOrders.set(id.toString(), {
+          isBuy: true,
+          price: bid.price,
+          size: bid.size,
+        });
       }
       if (this.bestBid == null) {
         this.bestBid = bid.price;
@@ -208,11 +195,12 @@ export class SimpleMarketMaker {
     }
     for (let ask of asks) {
       if (ask.openOrdersAddress.equals(this.marketMakerOpenOrders)) {
-        let id = throwIfUndefined(ask.clientId);
-        this.askOrders.set(
-          id.toString(),
-          new OrderState(id, ask.side, ask.price, ask.size)
-        );
+        const id = throwIfUndefined(ask.clientId);
+        this.askOrders.set(id.toString(), {
+          isBuy: false,
+          price: ask.price,
+          size: ask.size,
+        });
       }
       if (this.bestAsk == null) {
         this.bestAsk = ask.price;
@@ -226,73 +214,55 @@ export class SimpleMarketMaker {
     await this.cancelAll(this.bidOrders);
     this.bidOrders.clear();
 
-    await this.onBook();
+    await this.onBid();
+    await this.onAsk();
   }
 
-  async onBook() {
-    console.log(
-      "onBook() bestBid = ",
-      this.bestBid,
-      "bestAsk = ",
-      this.bestAsk,
-      "bidPrice = ",
-      this.bidPrice,
-      "askPrice = ",
-      this.askPrice
-    );
+  // Reacts to bid changes.
+  async onBid() {
     if (this.bestBid != this.bidPrice && this.bestBid != null) {
       await this.cancelAll(this.bidOrders);
       this.bidOrders.clear();
-      let clientID = this.generateClientId(this.bestBid, "buy");
-      console.log("Placing " + ORDER_SIZE + "@" + this.bestBid + " bid");
-      await this.placeOrder(clientID, "buy", this.bestBid, ORDER_SIZE);
-      this.bidOrders.set(
-        clientID.toString(),
-        new OrderState(clientID, "buy", this.bestBid, ORDER_SIZE)
-      );
+      await this.placeOrder(true, this.bestBid, ORDER_SIZE);
       this.bidPrice = this.bestBid;
     }
+  }
 
+  // Reacts to ask changes.
+  async onAsk() {
     if (this.bestAsk != this.askPrice && this.bestAsk != null) {
       await this.cancelAll(this.askOrders);
       this.askOrders.clear();
-      let clientID = this.generateClientId(this.bestAsk, "sell");
-      console.log("Placing " + ORDER_SIZE + "@" + this.bestAsk + " ask");
-      await this.placeOrder(clientID, "sell", this.bestAsk, ORDER_SIZE);
-      this.askOrders.set(
-        clientID.toString(),
-        new OrderState(clientID, "sell", this.bestAsk, ORDER_SIZE)
-      );
+      await this.placeOrder(false, this.bestAsk, ORDER_SIZE);
       this.askPrice = this.bestAsk;
     }
   }
 
+  // Reacts to a fill event.
   async onFill(bidFillQuantity: number, askFillQuantity: number) {
+    console.log(
+      "[onFill] bidFillQuantity",
+      bidFillQuantity,
+      "askFillQuantity",
+      askFillQuantity
+    );
     if (bidFillQuantity > 0 && this.bidPrice != null) {
-      let clientID = this.generateClientId(this.bidPrice, "buy");
-      console.log("Placing " + bidFillQuantity + "@" + this.bidPrice + " bid");
-      await this.placeOrder(clientID, "buy", this.bidPrice, bidFillQuantity);
-      this.bidOrders.set(
-        clientID.toString(),
-        new OrderState(clientID, "buy", this.bidPrice, bidFillQuantity)
-      );
+      await this.placeOrder(true, this.bidPrice, bidFillQuantity);
+    }
+    if (askFillQuantity > 0 && this.askPrice != null) {
+      await this.placeOrder(false, this.askPrice, askFillQuantity);
     }
 
-    if (askFillQuantity > 0 && this.askPrice != null) {
-      let clientID = this.generateClientId(this.askPrice, "sell");
-      console.log("Placing " + askFillQuantity + "@" + this.askPrice + " ask");
-      await this.placeOrder(clientID, "sell", this.askPrice, askFillQuantity);
-      this.askOrders.set(
-        clientID.toString(),
-        new OrderState(clientID, "sell", this.askPrice, askFillQuantity)
-      );
+    if (bidFillQuantity || askFillQuantity) {
+      await this.settle();
     }
   }
 
+  // Settles funds. This only needs to be called occasionally if the market
+  // maker's token accounts have sufficient inventory. In this example, we
+  // settle as soon as there is a fill.
   async settle() {
-    let market = this.market;
-
-    for (let openOrders of await market.findOpenOrdersAccountsForOwner(
+    for (const openOrders of await this.market.findOpenOrdersAccountsForOwner(
       this.connection,
       this.marketMaker.publicKey
     )) {
@@ -300,8 +270,7 @@ export class SimpleMarketMaker {
         openOrders.baseTokenFree > new BN(0) ||
         openOrders.quoteTokenFree > new BN(0)
       ) {
-        // spl-token accounts to which to send the proceeds from trades
-        await market.settleFunds(
+        await this.market.settleFunds(
           this.connection,
           new Account(this.marketMaker.secretKey),
           openOrders,
@@ -312,19 +281,12 @@ export class SimpleMarketMaker {
     }
   }
 
-  generateClientId(price: number, side: "buy" | "sell") {
-    let upper = new BN(price);
-    upper.iushln(32);
-    let lower = new BN(this.seqNum);
-    if (side == "buy") lower.inotn(32);
-    this.seqNum++;
-    return upper.uor(lower);
-  }
-
+  // Runs the market maker. Initializes and sets up the event listeners.
   async run() {
     await this.initialize();
     const mutex = new Mutex();
 
+    // Listens to bid account changes.
     this.connection.onAccountChange(
       this.bids,
       async (accountinfo: AccountInfo<Buffer>) => {
@@ -332,12 +294,13 @@ export class SimpleMarketMaker {
           let bids = Orderbook.decode(this.market, accountinfo.data);
           let topOfBook = bids.items(true).next();
           this.bestBid =
-            topOfBook.value == null ? MIN_BID : topOfBook.value.price;
-          await this.onBook();
+            topOfBook.value == null ? MIN_BID_PRICE : topOfBook.value.price;
+          await this.onBid();
         });
       }
     );
 
+    // Listens to ask account changes.
     this.connection.onAccountChange(
       this.asks,
       async (accountinfo: AccountInfo<Buffer>) => {
@@ -345,12 +308,13 @@ export class SimpleMarketMaker {
           let asks = Orderbook.decode(this.market, accountinfo.data);
           let topOfBook = asks.items().next();
           this.bestAsk =
-            topOfBook.value == null ? MIN_ASK : topOfBook.value.price;
-          await this.onBook();
+            topOfBook.value == null ? MIN_ASK_PRICE : topOfBook.value.price;
+          await this.onAsk();
         });
       }
     );
 
+    // Listens to fills.
     this.connection.onAccountChange(
       this.eventQueue,
       async (accountinfo: AccountInfo<Buffer>) => {
@@ -360,7 +324,9 @@ export class SimpleMarketMaker {
             this.eventQueueSequenceNumber
           ).filter((event) => event.eventFlags.fill);
           this.eventQueueSequenceNumber = (
-            EVENT_QUEUE_HEADER.decode(accountinfo.data) as EventQueue
+            EVENT_QUEUE_LAYOUT.HEADER.decode(
+              accountinfo.data
+            ) as EventQueueHeader
           ).seqNum;
           let [bidOrdersFilled, askOrdersFilled] =
             this.parseFillsFromEventQueue(eq);
@@ -372,6 +338,8 @@ export class SimpleMarketMaker {
     );
   }
 
+  // Updates internal order state with fill information and returns aggregate
+  // filled bids and asks.
   parseFillsFromEventQueue(events: any[]): [number, number] {
     let bidOrdersFilled = 0;
     let askOrdersFilled = 0;
@@ -407,22 +375,16 @@ export class SimpleMarketMaker {
   }
 }
 
-export function throwIfNull<T>(
-  value: T | null,
-  message = "account not found"
-): T {
+export function throwIfNull<T>(value: T | null): T {
   if (value === null) {
-    throw new Error(message);
+    throw new Error("account not found");
   }
   return value;
 }
 
-export function throwIfUndefined<T>(
-  value: T | undefined,
-  message = "account not found"
-): T {
+export function throwIfUndefined<T>(value: T | undefined): T {
   if (value === undefined) {
-    throw new Error(message);
+    throw new Error("account not found");
   }
   return value;
 }

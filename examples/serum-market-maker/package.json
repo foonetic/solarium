@@ -33,7 +33,6 @@
     "argparse": "^2.0.1",
     "async-mutex": "^0.3.2",
     "bn.js-typings": "^1.0.1",
-    "bs58": "^5.0.0",
-    "buffer-layout": "^1.2.2"
+    "bs58": "^5.0.0"
   }
 }
