@@ -1,3 +1,12 @@
+/**
+ * Uses Solarium to create a local test market running in a local test
+ * validator. All of the relevant keys related to the market are saved in
+ * market.json.
+ *
+ * This program is meant to be used in conjunction with serum-market-maker and
+ * serum-place-order examples. Please see the documentation under
+ * serum-market-maker for more details.
+ */
 use serde::Serialize;
 use solana_program::native_token::LAMPORTS_PER_SOL;
 use solarium::{actor::Actor, sandbox::Sandbox, serum::Participant, token::Mint};
