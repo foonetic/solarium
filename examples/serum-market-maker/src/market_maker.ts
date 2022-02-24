@@ -193,7 +193,7 @@ export class SimpleMarketMaker {
         this.bestBid = Math.max(this.bestBid, bid.price);
       }
     }
-    for (let ask of asks) {
+    for (const ask of asks) {
       if (ask.openOrdersAddress.equals(this.marketMakerOpenOrders)) {
         const id = throwIfUndefined(ask.clientId);
         this.askOrders.set(id.toString(), {
@@ -291,8 +291,8 @@ export class SimpleMarketMaker {
       this.bids,
       async (accountinfo: AccountInfo<Buffer>) => {
         await mutex.runExclusive(async () => {
-          let bids = Orderbook.decode(this.market, accountinfo.data);
-          let topOfBook = bids.items(true).next();
+          const bids = Orderbook.decode(this.market, accountinfo.data);
+          const topOfBook = bids.items(true).next();
           this.bestBid =
             topOfBook.value == null ? MIN_BID_PRICE : topOfBook.value.price;
           await this.onBid();
@@ -305,8 +305,8 @@ export class SimpleMarketMaker {
       this.asks,
       async (accountinfo: AccountInfo<Buffer>) => {
         await mutex.runExclusive(async () => {
-          let asks = Orderbook.decode(this.market, accountinfo.data);
-          let topOfBook = asks.items().next();
+          const asks = Orderbook.decode(this.market, accountinfo.data);
+          const topOfBook = asks.items().next();
           this.bestAsk =
             topOfBook.value == null ? MIN_ASK_PRICE : topOfBook.value.price;
           await this.onAsk();
@@ -319,7 +319,7 @@ export class SimpleMarketMaker {
       this.eventQueue,
       async (accountinfo: AccountInfo<Buffer>) => {
         await mutex.runExclusive(async () => {
-          let eq: any[] = decodeEventsSince(
+          const eq: any[] = decodeEventsSince(
             accountinfo.data,
             this.eventQueueSequenceNumber
           ).filter((event) => event.eventFlags.fill);
@@ -328,7 +328,7 @@ export class SimpleMarketMaker {
               accountinfo.data
             ) as EventQueueHeader
           ).seqNum;
-          let [bidOrdersFilled, askOrdersFilled] =
+          const [bidOrdersFilled, askOrdersFilled] =
             this.parseFillsFromEventQueue(eq);
 
           if (eq.length != 0)

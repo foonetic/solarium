@@ -13,36 +13,60 @@ use solarium::{actor::Actor, sandbox::Sandbox, serum::Participant, token::Mint};
 use std::convert::TryInto;
 use std::fs;
 
+// Represents a Serum market participant that was initialized by this binary.
 #[derive(Serialize, Debug)]
 struct TestMarketParticipant {
+    // Participant's private key.
     keypair: String,
+
+    // Public key of participant's base token account.
     base: String,
+
+    // Public key of participant's quote token account.
     quote: String,
+
+    // Public key of participant's open orders account.
     orders: String,
 }
 
+// Represents a Serum market that was initialized by this binary.
 #[derive(Serialize, Debug)]
 struct TestMarket {
+    // Solana test validator RPC endpoint.
     url: String,
+
+    // Serum program public key.
     program_id: String,
+
+    // Public key of the market initialized by this binary.
     market: String,
+
+    // Public key of the market's bids slab initialized by this binary.
     bids: String,
+
+    // Public key of the market's asks slab initialized by this binary.
     asks: String,
+
+    // Public key of the market's event queue initialized by this binary.
     event_queue: String,
+
+    // Market participants initialized by this binary.
     participants: [TestMarketParticipant; NUM_PARTICIPANTS],
 }
 
 const NUM_PARTICIPANTS: usize = 4;
 
 fn main() {
-    println!("Creating sandbox");
+    println!("Creating solana-test-validator sandbox environment");
     let sandbox = Sandbox::new().unwrap();
     let market_creator = Actor::new(&sandbox).unwrap();
     market_creator.airdrop(10000 * LAMPORTS_PER_SOL).unwrap();
+
+    println!("Creating fake tokens for use in Serum market");
     let base_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
     let quote_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
 
-    println!("Deploying serum");
+    println!("Deploying serum to the sandbox environment");
     let serum_program = market_creator
         .deploy_remote(
             "https://github.com/foonetic/solarium-deps/raw/main/serum_dex.so",
@@ -50,7 +74,7 @@ fn main() {
         )
         .unwrap();
 
-    println!("Creating market");
+    println!("Creating new Serum market for testing");
     let market = solarium::serum::Market::new(
         &sandbox,
         &market_creator,
@@ -67,7 +91,7 @@ fn main() {
     )
     .unwrap();
 
-    println!("Creating participants");
+    println!("Creating Serum market participants with large SOL and token balances for trading");
     let mut participants = Vec::new();
     for _ in 0..NUM_PARTICIPANTS {
         let p = Participant::new(
@@ -88,6 +112,7 @@ fn main() {
         });
     }
 
+    println!("Writing market.json");
     let data = TestMarket {
         url: sandbox.url(),
         program_id: serum_program.pubkey().to_string(),
@@ -97,10 +122,7 @@ fn main() {
         event_queue: market.event_queue().pubkey().to_string(),
         participants: participants.try_into().unwrap(),
     };
-
-    println!("Writing market data");
     serde_json::to_writer(&fs::File::create("market.json").unwrap(), &data).unwrap();
-
     std::fs::OpenOptions::new()
         .create(true)
         .write(true)
