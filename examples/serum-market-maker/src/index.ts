@@ -50,7 +50,7 @@ async function main() {
   const base = new PublicKey(marketMaker.base);
   const quote = new PublicKey(marketMaker.quote);
 
-  let mm = new SimpleMarketMaker(
+  const mm = new SimpleMarketMaker(
     connection,
     programId,
     marketAddress,
