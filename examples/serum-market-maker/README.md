@@ -25,8 +25,7 @@ cargo build
 target/debug/create_serum_market
 
 # Start the market making strategy.
-cd examples/serum-market-maker
-ts-node src/index.ts
+ts-node examples/serum-market-maker/src/index.ts
 
 # Simulate other participants and see how the market maker responds.
 cd examples/serum-place-order

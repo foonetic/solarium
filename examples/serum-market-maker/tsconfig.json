@@ -6,11 +6,7 @@
     "noImplicitAny": true,
     "esModuleInterop": true,
     "downlevelIteration": true,
-    "moduleResolution": "node",
-    "typeRoots": ["./node_modules/@types", "./types"],
-    "paths": {
-      "*": ["./*", "./types/*"]
-    }
+    "moduleResolution": "node"
   },
   "files": ["src/index.ts"],
 }
