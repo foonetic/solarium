@@ -47,7 +47,13 @@ impl<'a> PriceAccount<'a> {
         })
     }
 
-    pub fn publish_price(&self, pyth: &'a Pubkey, payer: &'a Actor, price: i64) -> Result<()> {
+    pub fn publish_price(
+        &self,
+        pyth: &'a Pubkey,
+        payer: &'a Actor,
+        price: i64,
+        decimal: i32,
+    ) -> Result<()> {
         let mut instructions = Vec::new();
 
         let publish_instr = pyth_sim::instruction::publish_price(
@@ -55,6 +61,7 @@ impl<'a> PriceAccount<'a> {
             payer.pubkey(),
             &self.account.pubkey(),
             price,
+            decimal,
         )
         .unwrap();
 
