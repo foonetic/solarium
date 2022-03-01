@@ -75,7 +75,7 @@ mod tests {
         assert_eq!(val.get_current_price().unwrap().price, 0);
 
         priceAccount
-            .publish_price(pyth_sim.pubkey(), &pyth_owner, 15)
+            .publish_price(pyth_sim.pubkey(), &pyth_owner, 15, 2)
             .unwrap();
 
         let price_data = sandbox
@@ -86,6 +86,7 @@ mod tests {
         let val = load_price(price_data.as_slice().try_into().unwrap()).unwrap();
 
         assert_eq!(val.get_current_price().unwrap().price, 15);
+        assert_eq!(val.get_current_price().unwrap().expo, 2);
     }
 
     #[test]

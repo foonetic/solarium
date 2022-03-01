@@ -24,11 +24,13 @@ pub fn handle(
     let acct_pkey = next_account_info(ai_iter)?;
 
     let price: i64 = pub_instr.price as i64;
+    let decimal: i32 = pub_instr.decimal as i32;
 
     let mut price_struct: Price = Price::unpack_from_slice(&acct_pkey.data.borrow_mut())?;
  
     price_struct.agg.price = price;
     price_struct.agg.pub_slot = Clock::get().unwrap().slot;
+    price_struct.expo = decimal;
     price_struct.pack_into_slice(&mut *acct_pkey.data.borrow_mut())?;
 
     Ok(())
