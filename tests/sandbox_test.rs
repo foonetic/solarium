@@ -17,6 +17,7 @@ mod tests {
         matching::{OrderType, Side},
     };
 
+
     use pyth_client::{load_price, PriceConf};
 
     use std::thread::sleep;
@@ -205,6 +206,65 @@ mod tests {
         assert_eq!(end_taker_b, "1015");
         assert_eq!(end_maker_q, "2299");
         assert_eq!(end_taker_q, "1700");
+    }
+
+    #[test]
+    fn integration_v4() {
+        let sandbox = Sandbox::new().unwrap();
+        println!("sandbox url: {}", sandbox.url());
+        let market_creator = Actor::new(&sandbox).unwrap();
+        market_creator.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
+        let base_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
+        let quote_mint = Mint::new(&sandbox, &market_creator, 0, None, None).unwrap();
+        let serum_program = market_creator
+            .deploy_local(
+                &std::path::Path::new(
+                "../dex-v4/program/target/deploy/dex_v4.so",
+            ))
+            .unwrap();
+        
+        let market = solarium::serum_v4::Market::new(
+            &sandbox,
+            &market_creator,
+            serum_program.pubkey(),
+            &base_mint,
+            &quote_mint,
+            1,
+            1,
+            100,
+            128,
+            256,
+        )
+        .unwrap();
+        println!("Made market.");
+
+        // let maker = solarium::serum_v4::Participant::new(
+        //     &sandbox,
+        //     &market_creator,
+        //     &market,
+        //     10 * LAMPORTS_PER_SOL,
+        //     1000,
+        //     2000,
+        // )
+        // .unwrap();
+
+        
+
+        // let taker = solarium::serum_v4::Participant::new(
+        //     &sandbox,
+        //     &market_creator,
+        //     &market,
+        //     10 * LAMPORTS_PER_SOL,
+        //     1000,
+        //     2000,
+        // )
+        // .unwrap();
+
+        // let _maker_order = market.
+
+
+
+        while(true){}
     }
 
     fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {

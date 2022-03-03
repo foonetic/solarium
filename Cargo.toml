@@ -19,9 +19,12 @@ solana-logger = "1.9.3"
 serum_dex = "0.5.0"
 pyth-client = "0.5.0"
 
+dex-v4 = {path = "../dex-v4/program"}
+
 solana-client = "1.9.3"
 solana-program = "1.9.4"
 solana-sdk = "1.9.4"
+# solana-sdk =  {path = "../solana"}
 spl-token = "3.2.0"
 tempfile = "3.0"
 borsh = "0.9.1"

@@ -101,8 +101,10 @@ impl Sandbox {
         signers: Vec<&Keypair>,
     ) -> Result<()> {
         let recent_hash = self.client.get_latest_blockhash()?;
+        println!("KIWI");
         let transaction =
             Transaction::new_signed_with_payer(instructions, payer, &signers, recent_hash);
+            println!("MANGO");
         self.client.send_and_confirm_transaction(&transaction)?;
         Ok(())
     }
