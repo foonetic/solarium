@@ -47,8 +47,23 @@ struct TestMarket {
     // Public key of the market's asks slab initialized by this binary.
     asks: String,
 
+    // Public key of the market's request queue initialized by this binary.
+    request_queue: String,
+
     // Public key of the market's event queue initialized by this binary.
     event_queue: String,
+
+    // Public key of the market's base vault initialized by this binary.
+    base_vault: String,
+
+    // Public key of the market's quote vault initialized by this binary.
+    quote_vault: String,
+
+    // Public key of the market's base mint initialized by this binary.
+    base_mint: String,
+
+    // Public key of the market's quote mint initialized by this binary.
+    quote_mint: String,
 
     // Market participants initialized by this binary.
     participants: [TestMarketParticipant; NUM_PARTICIPANTS],
@@ -134,7 +149,12 @@ fn main() {
         market: market.market().pubkey().to_string(),
         bids: market.bids().pubkey().to_string(),
         asks: market.asks().pubkey().to_string(),
+        request_queue: market.request_queue().pubkey().to_string(),
         event_queue: market.event_queue().pubkey().to_string(),
+        base_vault: market.base_vault().account().pubkey().to_string(),
+        quote_vault: market.quote_vault().account().pubkey().to_string(),
+        base_mint: market.base_mint().actor().pubkey().to_string(),
+        quote_mint: market.quote_mint().actor().pubkey().to_string(),
         participants: participants.try_into().unwrap(),
     };
     serde_json::to_writer(&fs::File::create(&args.output_file_name).unwrap(), &data).unwrap();
