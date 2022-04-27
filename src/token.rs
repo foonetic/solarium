@@ -5,6 +5,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use spl_token::{self, instruction as spl_instruction, state as spl_state};
+use spl_associated_token_account::{instruction as spl_assocated_instruction};
 
 #[derive(BorshSerialize, BorshDeserialize, Eq, PartialEq, PartialOrd)]
 pub enum BaseOrQuote {
@@ -90,6 +91,23 @@ impl<'a> Mint<'a> {
             &spl_token::id(),
             self.mint.pubkey(),
             destination.account().pubkey(),
+            self.authority.pubkey(),
+            &[],
+            amount,
+        )?;
+
+        self.sandbox.send_signed_transaction_with_payers(
+            &[instruction],
+            Some(actor.pubkey()),
+            vec![actor.keypair(), self.authority.keypair()],
+        )
+    }
+
+    pub fn mint_to_pkey(&self, actor: &Actor, destination: &Pubkey, amount: u64) -> Result<()> {
+        let instruction = spl_instruction::mint_to(
+            &spl_token::id(),
+            self.mint.pubkey(),
+            destination,
             self.authority.pubkey(),
             &[],
             amount,

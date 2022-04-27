@@ -6,7 +6,7 @@ mod tests {
 
     use solarium::{
         actor::Actor,
-        pyth::PriceAccount,
+        // pyth::PriceAccount,
         sandbox::Sandbox,
         serum::Participant,
         token::{BaseOrQuote, Mint},
@@ -47,47 +47,47 @@ mod tests {
         pub serum_tail_padding: [u8; 7],
     }
 
-    #[test]
-    fn pyth() {
-        let sandbox = Sandbox::new().unwrap();
-        println!("sandbox url: {}", sandbox.url());
+    // #[test]
+    // fn pyth() {
+    //     let sandbox = Sandbox::new().unwrap();
+    //     println!("sandbox url: {}", sandbox.url());
 
-        let pyth_owner = Actor::new(&sandbox).unwrap();
-        pyth_owner.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
+    //     let pyth_owner = Actor::new(&sandbox).unwrap();
+    //     pyth_owner.airdrop(10 * LAMPORTS_PER_SOL).unwrap();
 
-        let pyth_sim = pyth_owner
-            .deploy_remote(
-                "https://github.com/foonetic/solarium-deps/raw/main/pyth_sim.so",
-                "pyth_sim.so",
-            )
-            .unwrap();
+    //     let pyth_sim = pyth_owner
+    //         .deploy_remote(
+    //             "https://github.com/foonetic/solarium-deps/raw/main/pyth_sim.so",
+    //             "pyth_sim.so",
+    //         )
+    //         .unwrap();
 
-        let priceAccount =
-            solarium::pyth::PriceAccount::new(&sandbox, pyth_sim.pubkey(), &pyth_owner).unwrap();
+    //     let priceAccount =
+    //         solarium::pyth::PriceAccount::new(&sandbox, pyth_sim.pubkey(), &pyth_owner).unwrap();
 
-        let price_data = sandbox
-            .client()
-            .get_account_data(priceAccount.account().pubkey())
-            .unwrap();
+    //     let price_data = sandbox
+    //         .client()
+    //         .get_account_data(priceAccount.account().pubkey())
+    //         .unwrap();
 
-        let val = load_price(price_data.as_slice().try_into().unwrap()).unwrap();
+    //     let val = load_price(price_data.as_slice().try_into().unwrap()).unwrap();
 
-        assert_eq!(val.get_current_price().unwrap().price, 0);
+    //     assert_eq!(val.get_current_price().unwrap().price, 0);
 
-        priceAccount
-            .publish_price(pyth_sim.pubkey(), &pyth_owner, 15, 2)
-            .unwrap();
+    //     priceAccount
+    //         .publish_price(pyth_sim.pubkey(), &pyth_owner, 15, 2)
+    //         .unwrap();
 
-        let price_data = sandbox
-            .client()
-            .get_account_data(priceAccount.account().pubkey())
-            .unwrap();
+    //     let price_data = sandbox
+    //         .client()
+    //         .get_account_data(priceAccount.account().pubkey())
+    //         .unwrap();
 
-        let val = load_price(price_data.as_slice().try_into().unwrap()).unwrap();
+    //     let val = load_price(price_data.as_slice().try_into().unwrap()).unwrap();
 
-        assert_eq!(val.get_current_price().unwrap().price, 15);
-        assert_eq!(val.get_current_price().unwrap().expo, 2);
-    }
+    //     assert_eq!(val.get_current_price().unwrap().price, 15);
+    //     assert_eq!(val.get_current_price().unwrap().expo, 2);
+    // }
 
     #[test]
     fn integration() {
@@ -205,6 +205,8 @@ mod tests {
         assert_eq!(end_taker_b, "1015");
         assert_eq!(end_maker_q, "2299");
         assert_eq!(end_taker_q, "1700");
+
+        while(true) {}
     }
 
     fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {

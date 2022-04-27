@@ -17,14 +17,14 @@ clap = { version = "3.1.6", features = ["derive"] }
 
 serum-common = { git = "https://github.com/project-serum/serum-dex", tag = "v0.5.4", features = ["client"] }
 solana-logger = "1.9.3"
-serum_dex = "0.5.4"
-pyth-client = "0.5.0"
+serum_dex = { version = "0.5.4", features = ["no-entrypoint"] } 
+pyth-client = { version = "0.5.0", features = ["no-entrypoint"] }
 
 solana-client = "1.9.3"
 solana-program = "1.9.4"
 solana-sdk = "1.9.4"
 spl-token = "3.2.0"
+spl-associated-token-account = "1.0.5"
 tempfile = "3.0"
 borsh = "0.9.1"
 
-pyth-sim = { path = "./pyth" }
